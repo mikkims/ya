@@ -5,13 +5,18 @@ import (
 	"math/rand"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 const (
-	baseURL     = "http://localhost:8080/"
-	originalURL = "https://practicum.yandex.ru/"
-	idLength    = 8
-	alphabet    = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	baseURL  = "http://localhost:8080/"
+	idLength = 8
+	alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+)
+
+var (
+	urls = make(map[string]string)
+	mu   sync.RWMutex
 )
 
 func NewRouter() http.Handler {
@@ -43,6 +48,9 @@ func createShortURL(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := generateID()
+	mu.Lock()
+	urls[id] = string(body)
+	mu.Unlock()
 
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusCreated)
@@ -52,6 +60,14 @@ func createShortURL(w http.ResponseWriter, r *http.Request) {
 func getOriginalURL(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/")
 	if id == "" || strings.Contains(id, "/") {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	mu.RLock()
+	originalURL, ok := urls[id]
+	mu.RUnlock()
+	if !ok {
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
