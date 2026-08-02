@@ -3,13 +3,13 @@ package handler
 import (
 	"math/rand"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/gin-gonic/gin"
 )
 
 const (
-	baseURL  = "http://localhost:8080/"
 	idLength = 8
 	alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 )
@@ -19,9 +19,11 @@ var (
 	mu   sync.RWMutex
 )
 
-func NewRouter() http.Handler {
+func NewRouter(baseURL string) http.Handler {
 	router := gin.New()
-	router.POST("/", createShortURL)
+	router.POST("/", func(c *gin.Context) {
+		createShortURL(c, baseURL)
+	})
 	router.GET("/:id", getOriginalURL)
 	router.NoRoute(badRequest)
 
@@ -32,7 +34,7 @@ func badRequest(c *gin.Context) {
 	c.String(http.StatusBadRequest, "Bad request")
 }
 
-func createShortURL(c *gin.Context) {
+func createShortURL(c *gin.Context, baseURL string) {
 	body, err := c.GetRawData()
 	if err != nil || len(body) == 0 {
 		badRequest(c)
@@ -44,7 +46,8 @@ func createShortURL(c *gin.Context) {
 	urls[id] = string(body)
 	mu.Unlock()
 
-	c.Data(http.StatusCreated, "text/plain", []byte(baseURL+id))
+	shortURL := strings.TrimRight(baseURL, "/") + "/" + id
+	c.Data(http.StatusCreated, "text/plain", []byte(shortURL))
 }
 
 func getOriginalURL(c *gin.Context) {

@@ -8,7 +8,8 @@ import (
 )
 
 func TestCreateShortURL(t *testing.T) {
-	router := NewRouter()
+	const baseURL = "http://localhost:8080/"
+	router := NewRouter(baseURL)
 
 	tests := []struct {
 		name       string
@@ -67,7 +68,7 @@ func TestGetOriginalURL(t *testing.T) {
 	mu.Lock()
 	urls[id] = originalURL
 	mu.Unlock()
-	router := NewRouter()
+	router := NewRouter("http://localhost:8080")
 
 	tests := []struct {
 		name         string

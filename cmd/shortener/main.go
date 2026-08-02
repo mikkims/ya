@@ -3,11 +3,14 @@ package main
 import (
 	"net/http"
 
+	"github.com/mikkims/ya/internal/config"
 	"github.com/mikkims/ya/internal/handler"
 )
 
 func main() {
-	err := http.ListenAndServe(":8080", handler.NewRouter())
+	cfg := config.Parse()
+
+	err := http.ListenAndServe(cfg.ServerAddress, handler.NewRouter(cfg.BaseURL))
 	if err != nil {
 		panic(err)
 	}
