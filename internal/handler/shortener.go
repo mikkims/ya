@@ -1,11 +1,11 @@
 package handler
 
 import (
-	"io"
 	"math/rand"
 	"net/http"
-	"strings"
 	"sync"
+
+	"github.com/gin-gonic/gin"
 )
 
 const (
@@ -20,30 +20,22 @@ var (
 )
 
 func NewRouter() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", handleRequest)
+	router := gin.New()
+	router.POST("/", createShortURL)
+	router.GET("/:id", getOriginalURL)
+	router.NoRoute(badRequest)
 
-	return mux
+	return router
 }
 
-func handleRequest(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPost && r.URL.Path == "/" {
-		createShortURL(w, r)
-		return
-	}
-
-	if r.Method == http.MethodGet && r.URL.Path != "/" {
-		getOriginalURL(w, r)
-		return
-	}
-
-	http.Error(w, "Bad request", http.StatusBadRequest)
+func badRequest(c *gin.Context) {
+	c.String(http.StatusBadRequest, "Bad request")
 }
 
-func createShortURL(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+func createShortURL(c *gin.Context) {
+	body, err := c.GetRawData()
 	if err != nil || len(body) == 0 {
-		http.Error(w, "Bad request", http.StatusBadRequest)
+		badRequest(c)
 		return
 	}
 
@@ -52,28 +44,21 @@ func createShortURL(w http.ResponseWriter, r *http.Request) {
 	urls[id] = string(body)
 	mu.Unlock()
 
-	w.Header().Set("Content-Type", "text/plain")
-	w.WriteHeader(http.StatusCreated)
-	_, _ = w.Write([]byte(baseURL + id))
+	c.Data(http.StatusCreated, "text/plain", []byte(baseURL+id))
 }
 
-func getOriginalURL(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/")
-	if id == "" || strings.Contains(id, "/") {
-		http.Error(w, "Bad request", http.StatusBadRequest)
-		return
-	}
-
+func getOriginalURL(c *gin.Context) {
+	id := c.Param("id")
 	mu.RLock()
 	originalURL, ok := urls[id]
 	mu.RUnlock()
 	if !ok {
-		http.Error(w, "Bad request", http.StatusBadRequest)
+		badRequest(c)
 		return
 	}
 
-	w.Header().Set("Location", originalURL)
-	w.WriteHeader(http.StatusTemporaryRedirect)
+	c.Header("Location", originalURL)
+	c.Status(http.StatusTemporaryRedirect)
 }
 
 func generateID() string {

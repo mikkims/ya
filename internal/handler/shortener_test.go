@@ -8,6 +8,8 @@ import (
 )
 
 func TestCreateShortURL(t *testing.T) {
+	router := NewRouter()
+
 	tests := []struct {
 		name       string
 		body       string
@@ -30,7 +32,7 @@ func TestCreateShortURL(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tt.body))
 			response := httptest.NewRecorder()
 
-			createShortURL(response, request)
+			router.ServeHTTP(response, request)
 
 			result := response.Result()
 			defer result.Body.Close()
@@ -65,6 +67,7 @@ func TestGetOriginalURL(t *testing.T) {
 	mu.Lock()
 	urls[id] = originalURL
 	mu.Unlock()
+	router := NewRouter()
 
 	tests := []struct {
 		name         string
@@ -100,7 +103,7 @@ func TestGetOriginalURL(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, tt.path, nil)
 			response := httptest.NewRecorder()
 
-			getOriginalURL(response, request)
+			router.ServeHTTP(response, request)
 
 			result := response.Result()
 			defer result.Body.Close()
