@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/mikkims/ya/internal/config"
@@ -12,6 +13,6 @@ func main() {
 
 	err := http.ListenAndServe(cfg.ServerAddress, handler.NewRouter(cfg.BaseURL))
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
 	}
 }

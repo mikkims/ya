@@ -40,19 +40,23 @@ func TestCreateShortURL(t *testing.T) {
 
 			if result.StatusCode != tt.wantStatus {
 				t.Errorf("status = %d, want %d", result.StatusCode, tt.wantStatus)
+				return
 			}
 
 			if tt.wantStatus == http.StatusCreated {
 				if contentType := result.Header.Get("Content-Type"); contentType != "text/plain" {
 					t.Errorf("Content-Type = %q, want %q", contentType, "text/plain")
+					return
 				}
 
 				shortURL := response.Body.String()
 				if !strings.HasPrefix(shortURL, baseURL) {
 					t.Errorf("short URL = %q, want prefix %q", shortURL, baseURL)
+					return
 				}
 				if len(strings.TrimPrefix(shortURL, baseURL)) != idLength {
 					t.Errorf("short URL ID must contain %d characters", idLength)
+					return
 				}
 			}
 		})
@@ -60,15 +64,16 @@ func TestCreateShortURL(t *testing.T) {
 }
 
 func TestGetOriginalURL(t *testing.T) {
-	const (
-		id          = "EwHXdJfB"
-		originalURL = "https://practicum.yandex.ru/"
-	)
-
-	mu.Lock()
-	urls[id] = originalURL
-	mu.Unlock()
+	const originalURL = "https://practicum.yandex.ru/"
 	router := NewRouter("http://localhost:8080")
+
+	createRequest := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(originalURL))
+	createResponse := httptest.NewRecorder()
+	router.ServeHTTP(createResponse, createRequest)
+	if createResponse.Code != http.StatusCreated {
+		t.Fatalf("failed to prepare shortened URL: status = %d, want %d", createResponse.Code, http.StatusCreated)
+	}
+	id := strings.TrimPrefix(createResponse.Body.String(), "http://localhost:8080/")
 
 	tests := []struct {
 		name         string
@@ -111,9 +116,11 @@ func TestGetOriginalURL(t *testing.T) {
 
 			if result.StatusCode != tt.wantStatus {
 				t.Errorf("status = %d, want %d", result.StatusCode, tt.wantStatus)
+				return
 			}
 			if location := result.Header.Get("Location"); location != tt.wantLocation {
 				t.Errorf("Location = %q, want %q", location, tt.wantLocation)
+				return
 			}
 		})
 	}
