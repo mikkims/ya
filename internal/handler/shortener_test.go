@@ -5,11 +5,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/mikkims/ya/internal/service"
+	"github.com/mikkims/ya/internal/storage"
 )
 
 func TestCreateShortURL(t *testing.T) {
 	const baseURL = "http://localhost:8080/"
-	router := NewRouter(baseURL)
+	router := NewRouter(baseURL, service.NewShortener(storage.NewMemory()))
 
 	tests := []struct {
 		name       string
@@ -54,8 +57,9 @@ func TestCreateShortURL(t *testing.T) {
 					t.Errorf("short URL = %q, want prefix %q", shortURL, baseURL)
 					return
 				}
-				if len(strings.TrimPrefix(shortURL, baseURL)) != idLength {
-					t.Errorf("short URL ID must contain %d characters", idLength)
+				const expectedIDLength = 8
+				if len(strings.TrimPrefix(shortURL, baseURL)) != expectedIDLength {
+					t.Errorf("short URL ID must contain %d characters", expectedIDLength)
 					return
 				}
 			}
@@ -65,7 +69,7 @@ func TestCreateShortURL(t *testing.T) {
 
 func TestGetOriginalURL(t *testing.T) {
 	const originalURL = "https://practicum.yandex.ru/"
-	router := NewRouter("http://localhost:8080")
+	router := NewRouter("http://localhost:8080", service.NewShortener(storage.NewMemory()))
 
 	createRequest := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(originalURL))
 	createResponse := httptest.NewRecorder()

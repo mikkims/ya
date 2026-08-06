@@ -1,34 +1,31 @@
 package handler
 
 import (
-	"math/rand"
 	"net/http"
 	"net/url"
-	"sync"
 
 	"github.com/gin-gonic/gin"
 )
 
-const (
-	idLength = 8
-	alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-)
-
-type shortener struct {
-	baseURL string
-	urls    map[string]string
-	mu      sync.Mutex
+type URLShortener interface {
+	Save(originalURL string) string
+	Get(id string) (string, bool)
 }
 
-func NewRouter(baseURL string) http.Handler {
-	service := &shortener{
+type handler struct {
+	baseURL string
+	service URLShortener
+}
+
+func NewRouter(baseURL string, service URLShortener) http.Handler {
+	h := &handler{
 		baseURL: baseURL,
-		urls:    make(map[string]string),
+		service: service,
 	}
 
 	router := gin.New()
-	router.POST("/", service.createShortURL)
-	router.GET("/:id", service.getOriginalURL)
+	router.POST("/", h.createShortURL)
+	router.GET("/:id", h.getOriginalURL)
 	router.NoRoute(badRequest)
 
 	return router
@@ -38,16 +35,16 @@ func badRequest(c *gin.Context) {
 	c.String(http.StatusBadRequest, "Bad request")
 }
 
-func (s *shortener) createShortURL(c *gin.Context) {
+func (h *handler) createShortURL(c *gin.Context) {
 	body, err := c.GetRawData()
 	if err != nil || len(body) == 0 {
 		badRequest(c)
 		return
 	}
 
-	id := s.save(string(body))
+	id := h.service.Save(string(body))
 
-	shortURL, err := url.JoinPath(s.baseURL, id)
+	shortURL, err := url.JoinPath(h.baseURL, id)
 	if err != nil {
 		badRequest(c)
 		return
@@ -55,9 +52,9 @@ func (s *shortener) createShortURL(c *gin.Context) {
 	c.Data(http.StatusCreated, "text/plain", []byte(shortURL))
 }
 
-func (s *shortener) getOriginalURL(c *gin.Context) {
+func (h *handler) getOriginalURL(c *gin.Context) {
 	id := c.Param("id")
-	originalURL, ok := s.get(id)
+	originalURL, ok := h.service.Get(id)
 	if !ok {
 		badRequest(c)
 		return
@@ -65,36 +62,4 @@ func (s *shortener) getOriginalURL(c *gin.Context) {
 
 	c.Header("Location", originalURL)
 	c.Status(http.StatusTemporaryRedirect)
-}
-
-func (s *shortener) save(originalURL string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for {
-		id := generateID()
-		if _, exists := s.urls[id]; exists {
-			continue
-		}
-
-		s.urls[id] = originalURL
-		return id
-	}
-}
-
-func (s *shortener) get(id string) (string, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	originalURL, ok := s.urls[id]
-	return originalURL, ok
-}
-
-func generateID() string {
-	id := make([]byte, idLength)
-	for i := range id {
-		id[i] = alphabet[rand.Intn(len(alphabet))]
-	}
-
-	return string(id)
 }
