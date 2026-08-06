@@ -1,6 +1,11 @@
 package storage
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
+
+var ErrIDExists = errors.New("short URL ID already exists")
 
 type Memory struct {
 	urls map[string]string
@@ -13,16 +18,16 @@ func NewMemory() *Memory {
 	}
 }
 
-func (s *Memory) Save(id, originalURL string) bool {
+func (s *Memory) Save(id, originalURL string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, exists := s.urls[id]; exists {
-		return false
+		return ErrIDExists
 	}
 
 	s.urls[id] = originalURL
-	return true
+	return nil
 }
 
 func (s *Memory) Get(id string) (string, bool) {

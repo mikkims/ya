@@ -1,20 +1,26 @@
 package service
 
 import (
+	"errors"
 	"math/rand"
+
+	"github.com/mikkims/ya/internal/storage"
 )
 
 const (
-	idLength = 8
-	alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	idLength        = 8
+	alphabet        = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	maxSaveAttempts = 3
 )
+
+var ErrSaveAttemptsExceeded = errors.New("failed to save short URL after maximum attempts")
 
 type Shortener struct {
 	storage URLStorage
 }
 
 type URLStorage interface {
-	Save(id, originalURL string) bool
+	Save(id, originalURL string) error
 	Get(id string) (string, bool)
 }
 
@@ -24,15 +30,21 @@ func NewShortener(storage URLStorage) *Shortener {
 	}
 }
 
-func (s *Shortener) Save(originalURL string) string {
-	for {
+func (s *Shortener) Save(originalURL string) (string, error) {
+	for range maxSaveAttempts {
 		id := generateID()
-		if !s.storage.Save(id, originalURL) {
+		err := s.storage.Save(id, originalURL)
+		if errors.Is(err, storage.ErrIDExists) {
 			continue
 		}
+		if err != nil {
+			return "", err
+		}
 
-		return id
+		return id, nil
 	}
+
+	return "", ErrSaveAttemptsExceeded
 }
 
 func (s *Shortener) Get(id string) (string, bool) {

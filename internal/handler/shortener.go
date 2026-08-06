@@ -8,7 +8,7 @@ import (
 )
 
 type URLShortener interface {
-	Save(originalURL string) string
+	Save(originalURL string) (string, error)
 	Get(id string) (string, bool)
 }
 
@@ -35,6 +35,10 @@ func badRequest(c *gin.Context) {
 	c.String(http.StatusBadRequest, "Bad request")
 }
 
+func internalServerError(c *gin.Context) {
+	c.String(http.StatusInternalServerError, "Internal server error")
+}
+
 func (h *handler) createShortURL(c *gin.Context) {
 	body, err := c.GetRawData()
 	if err != nil || len(body) == 0 {
@@ -42,7 +46,11 @@ func (h *handler) createShortURL(c *gin.Context) {
 		return
 	}
 
-	id := h.service.Save(string(body))
+	id, err := h.service.Save(string(body))
+	if err != nil {
+		internalServerError(c)
+		return
+	}
 
 	shortURL, err := url.JoinPath(h.baseURL, id)
 	if err != nil {
