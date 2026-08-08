@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	cfg := config.Parse()
+	cfg := config.Load()
 	urlStorage := storage.NewMemory()
 	shortenerService := service.NewShortener(urlStorage)
 
