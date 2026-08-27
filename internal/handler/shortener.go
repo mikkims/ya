@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/url"
 
 	"github.com/gin-gonic/gin"
+	"github.com/mikkims/ya/internal/model/dto"
 )
 
 type URLShortener interface {
@@ -25,10 +27,37 @@ func NewRouter(baseURL string, service URLShortener) http.Handler {
 
 	router := gin.New()
 	router.POST("/", h.createShortURL)
+	router.POST("/api/shorten", h.createShortURLJSON)
 	router.GET("/:id", h.getOriginalURL)
 	router.NoRoute(badRequest)
 
 	return router
+}
+
+func (h *handler) createShortURLJSON(c *gin.Context) {
+	var request dto.ShortenRequest
+	if err := json.NewDecoder(c.Request.Body).Decode(&request); err != nil || request.URL == "" {
+		badRequest(c)
+		return
+	}
+
+	id, err := h.service.Save(request.URL)
+	if err != nil {
+		internalServerError(c)
+		return
+	}
+
+	shortURL, err := url.JoinPath(h.baseURL, id)
+	if err != nil {
+		badRequest(c)
+		return
+	}
+
+	c.Header("Content-Type", "application/json")
+	c.Status(http.StatusCreated)
+	if err := json.NewEncoder(c.Writer).Encode(dto.ShortenResponse{Result: shortURL}); err != nil {
+		return
+	}
 }
 
 func badRequest(c *gin.Context) {
