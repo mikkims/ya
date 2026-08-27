@@ -15,13 +15,17 @@ import (
 
 func main() {
 	cfg := config.Load()
-	urlStorage := storage.NewMemory()
-	shortenerService := service.NewShortener(urlStorage)
 	appLogger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+	urlStorage, err := storage.NewFile(cfg.FileStoragePath)
+	if err != nil {
+		appLogger.Info().Err(err).Str("path", cfg.FileStoragePath).Msg("failed to initialize storage")
+		return
+	}
+	shortenerService := service.NewShortener(urlStorage)
 	router := handler.NewRouter(cfg.BaseURL, shortenerService)
 	compressedRouter := appgzip.MiddlewareGzip(router)
 
-	err := http.ListenAndServe(cfg.ServerAddress, logger.Middleware(appLogger)(compressedRouter))
+	err = http.ListenAndServe(cfg.ServerAddress, logger.Middleware(appLogger)(compressedRouter))
 	if err != nil {
 		appLogger.Info().Err(err).Msg("server stopped")
 	}
