@@ -1,22 +1,28 @@
 package main
 
 import (
-	"log"
 	"net/http"
+	"os"
 
 	"github.com/mikkims/ya/internal/config"
+	appgzip "github.com/mikkims/ya/internal/gzip"
 	"github.com/mikkims/ya/internal/handler"
+	"github.com/mikkims/ya/internal/logger"
 	"github.com/mikkims/ya/internal/service"
 	"github.com/mikkims/ya/internal/storage"
+	"github.com/rs/zerolog"
 )
 
 func main() {
-	cfg := config.Parse()
+	cfg := config.Load()
 	urlStorage := storage.NewMemory()
 	shortenerService := service.NewShortener(urlStorage)
+	appLogger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+	router := handler.NewRouter(cfg.BaseURL, shortenerService)
+	compressedRouter := appgzip.MiddlewareGzip(router)
 
-	err := http.ListenAndServe(cfg.ServerAddress, handler.NewRouter(cfg.BaseURL, shortenerService))
+	err := http.ListenAndServe(cfg.ServerAddress, logger.Middleware(appLogger)(compressedRouter))
 	if err != nil {
-		log.Fatal(err)
+		appLogger.Info().Err(err).Msg("server stopped")
 	}
 }

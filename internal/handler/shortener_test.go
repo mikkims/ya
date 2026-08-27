@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/mikkims/ya/internal/model/dto"
 	"github.com/mikkims/ya/internal/service"
 	"github.com/mikkims/ya/internal/storage"
 )
@@ -62,6 +64,65 @@ func TestCreateShortURL(t *testing.T) {
 					t.Errorf("short URL ID must contain %d characters", expectedIDLength)
 					return
 				}
+			}
+		})
+	}
+}
+
+func TestCreateShortURLJSON(t *testing.T) {
+	const baseURL = "http://localhost:8080/"
+	router := NewRouter(baseURL, service.NewShortener(storage.NewMemory()))
+
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+	}{
+		{
+			name:       "valid URL",
+			body:       `{"url":"https://practicum.yandex.ru"}`,
+			wantStatus: http.StatusCreated,
+		},
+		{
+			name:       "invalid JSON",
+			body:       `{"url":`,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "empty URL",
+			body:       `{"url":""}`,
+			wantStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/shorten", strings.NewReader(tt.body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			router.ServeHTTP(response, request)
+
+			if response.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", response.Code, tt.wantStatus)
+			}
+			if tt.wantStatus != http.StatusCreated {
+				return
+			}
+			if contentType := response.Header().Get("Content-Type"); contentType != "application/json" {
+				t.Errorf("Content-Type = %q, want %q", contentType, "application/json")
+			}
+
+			var result dto.ShortenResponse
+			if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if !strings.HasPrefix(result.Result, baseURL) {
+				t.Errorf("result = %q, want prefix %q", result.Result, baseURL)
+			}
+			const expectedIDLength = 8
+			if len(strings.TrimPrefix(result.Result, baseURL)) != expectedIDLength {
+				t.Errorf("short URL ID must contain %d characters", expectedIDLength)
 			}
 		})
 	}
