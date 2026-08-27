@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/mikkims/ya/internal/config"
+	appgzip "github.com/mikkims/ya/internal/gzip"
 	"github.com/mikkims/ya/internal/handler"
 	"github.com/mikkims/ya/internal/logger"
 	"github.com/mikkims/ya/internal/service"
@@ -18,8 +19,9 @@ func main() {
 	shortenerService := service.NewShortener(urlStorage)
 	appLogger := zerolog.New(os.Stdout).With().Timestamp().Logger()
 	router := handler.NewRouter(cfg.BaseURL, shortenerService)
+	compressedRouter := appgzip.MiddlewareGzip(router)
 
-	err := http.ListenAndServe(cfg.ServerAddress, logger.Middleware(appLogger)(router))
+	err := http.ListenAndServe(cfg.ServerAddress, logger.Middleware(appLogger)(compressedRouter))
 	if err != nil {
 		appLogger.Info().Err(err).Msg("server stopped")
 	}
