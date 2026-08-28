@@ -5,11 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/rs/zerolog"
 )
 
 func TestFilePersistsAndRestoresURLs(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data", "urls.json")
-	storage, err := NewFile(path)
+	storage, err := NewFile(path, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("create storage: %v", err)
 	}
@@ -20,7 +22,7 @@ func TestFilePersistsAndRestoresURLs(t *testing.T) {
 		t.Fatalf("save second URL: %v", err)
 	}
 
-	restored, err := NewFile(path)
+	restored, err := NewFile(path, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("restore storage: %v", err)
 	}
@@ -47,7 +49,7 @@ func TestFilePersistsAndRestoresURLs(t *testing.T) {
 }
 
 func TestFileRejectsDuplicateID(t *testing.T) {
-	storage, err := NewFile(filepath.Join(t.TempDir(), "urls.json"))
+	storage, err := NewFile(filepath.Join(t.TempDir(), "urls.json"), zerolog.Nop())
 	if err != nil {
 		t.Fatalf("create storage: %v", err)
 	}
@@ -64,7 +66,7 @@ func TestNewFileRejectsInvalidJSON(t *testing.T) {
 	if err := os.WriteFile(path, []byte("not-json"), 0o600); err != nil {
 		t.Fatalf("write invalid storage: %v", err)
 	}
-	if _, err := NewFile(path); err == nil {
+	if _, err := NewFile(path, zerolog.Nop()); err == nil {
 		t.Fatal("NewFile() error = nil, want an error")
 	}
 }
@@ -78,7 +80,7 @@ func TestNewFileRejectsDuplicateUUID(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatalf("write storage: %v", err)
 	}
-	if _, err := NewFile(path); err == nil {
+	if _, err := NewFile(path, zerolog.Nop()); err == nil {
 		t.Fatal("NewFile() error = nil, want an error")
 	}
 }

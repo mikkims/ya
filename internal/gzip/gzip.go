@@ -1,18 +1,22 @@
 package gzip
 
 import (
-	"bytes"
 	compressgzip "compress/gzip"
 	"mime"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/rs/zerolog"
 )
 
 type responseWriter struct {
 	http.ResponseWriter
-	status int
-	body   bytes.Buffer
+	status             int
+	acceptsCompression bool
+	wroteHeader        bool
+	gzipWriter         *compressgzip.Writer
+	logger             zerolog.Logger
 }
 
 func (w *responseWriter) WriteHeader(status int) {
@@ -22,57 +26,92 @@ func (w *responseWriter) WriteHeader(status int) {
 }
 
 func (w *responseWriter) Write(data []byte) (int, error) {
+	if !w.wroteHeader {
+		w.commitHeader(data)
+	}
+	if w.gzipWriter != nil {
+		return w.gzipWriter.Write(data)
+	}
+	return w.ResponseWriter.Write(data)
+}
+
+func MiddlewareGzip(logger zerolog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.EqualFold(strings.TrimSpace(r.Header.Get("Content-Encoding")), "gzip") {
+				reader, err := compressgzip.NewReader(r.Body)
+				if err != nil {
+					http.Error(w, "Bad request", http.StatusBadRequest)
+					return
+				}
+				r.Body = reader
+				r.ContentLength = -1
+				r.Header.Del("Content-Encoding")
+				r.Header.Del("Content-Length")
+				defer func() {
+					if err := reader.Close(); err != nil {
+						logger.Error().Err(err).Msg("failed to close gzip request body")
+					}
+				}()
+			}
+
+			writer := &responseWriter{
+				ResponseWriter:     w,
+				acceptsCompression: acceptsGzip(r.Header.Get("Accept-Encoding")),
+				logger:             logger,
+			}
+			next.ServeHTTP(writer, r)
+			if err := writer.finish(); err != nil {
+				logger.Error().Err(err).Msg("failed to finish gzip response")
+			}
+		})
+	}
+}
+
+func (w *responseWriter) commitHeader(firstChunk []byte) {
+	if w.wroteHeader {
+		return
+	}
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
-	return w.body.Write(data)
-}
-
-func MiddlewareGzip(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.EqualFold(strings.TrimSpace(r.Header.Get("Content-Encoding")), "gzip") {
-			reader, err := compressgzip.NewReader(r.Body)
-			if err != nil {
-				http.Error(w, "Bad request", http.StatusBadRequest)
-				return
-			}
-			defer func(reader *compressgzip.Reader) {
-				err := reader.Close()
-				if err != nil {
-
-				}
-			}(reader)
-			r.Body = reader
-			r.ContentLength = -1
-			r.Header.Del("Content-Encoding")
-			r.Header.Del("Content-Length")
-		}
-
-		writer := &responseWriter{ResponseWriter: w}
-		next.ServeHTTP(writer, r)
-		writer.flush(acceptsGzip(r.Header.Get("Accept-Encoding")))
-	})
-}
-
-func (w *responseWriter) flush(acceptsCompression bool) {
-	status := w.status
-	if status == 0 {
-		status = http.StatusOK
+	contentType := w.Header().Get("Content-Type")
+	if contentType == "" && len(firstChunk) > 0 {
+		contentType = http.DetectContentType(firstChunk)
+		w.Header().Set("Content-Type", contentType)
 	}
-
-	if acceptsCompression && compressible(w.Header().Get("Content-Type")) {
+	if w.acceptsCompression && compressible(contentType) {
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Add("Vary", "Accept-Encoding")
 		w.Header().Del("Content-Length")
-		w.ResponseWriter.WriteHeader(status)
-		writer := compressgzip.NewWriter(w.ResponseWriter)
-		_, _ = writer.Write(w.body.Bytes())
-		_ = writer.Close()
-		return
+		w.gzipWriter = compressgzip.NewWriter(w.ResponseWriter)
 	}
+	w.ResponseWriter.WriteHeader(w.status)
+	w.wroteHeader = true
+}
 
-	w.ResponseWriter.WriteHeader(status)
-	_, _ = w.ResponseWriter.Write(w.body.Bytes())
+func (w *responseWriter) finish() error {
+	if !w.wroteHeader {
+		w.commitHeader(nil)
+	}
+	if w.gzipWriter != nil {
+		return w.gzipWriter.Close()
+	}
+	return nil
+}
+
+func (w *responseWriter) Flush() {
+	if !w.wroteHeader {
+		w.commitHeader(nil)
+	}
+	if w.gzipWriter != nil {
+		if err := w.gzipWriter.Flush(); err != nil {
+			w.logger.Error().Err(err).Msg("failed to flush gzip response")
+		}
+	}
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 func compressible(contentType string) bool {

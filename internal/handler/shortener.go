@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/url"
 
@@ -36,7 +35,7 @@ func NewRouter(baseURL string, service URLShortener) http.Handler {
 
 func (h *handler) createShortURLJSON(c *gin.Context) {
 	var request dto.ShortenRequest
-	if err := json.NewDecoder(c.Request.Body).Decode(&request); err != nil || request.URL == "" {
+	if err := c.ShouldBindJSON(&request); err != nil || request.URL == "" {
 		badRequest(c)
 		return
 	}
@@ -53,11 +52,7 @@ func (h *handler) createShortURLJSON(c *gin.Context) {
 		return
 	}
 
-	c.Header("Content-Type", "application/json")
-	c.Status(http.StatusCreated)
-	if err := json.NewEncoder(c.Writer).Encode(dto.ShortenResponse{Result: shortURL}); err != nil {
-		return
-	}
+	c.JSON(http.StatusCreated, dto.ShortenResponse{Result: shortURL})
 }
 
 func badRequest(c *gin.Context) {

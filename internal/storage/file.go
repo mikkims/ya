@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+
+	"github.com/rs/zerolog"
 )
 
 type fileRecord struct {
@@ -23,9 +25,10 @@ type File struct {
 	records  []fileRecord
 	nextUUID int
 	mu       sync.RWMutex
+	logger   zerolog.Logger
 }
 
-func NewFile(path string) (*File, error) {
+func NewFile(path string, logger zerolog.Logger) (*File, error) {
 	if path == "" {
 		return nil, errors.New("storage file path is empty")
 	}
@@ -34,6 +37,7 @@ func NewFile(path string) (*File, error) {
 		path:     path,
 		urls:     make(map[string]string),
 		nextUUID: 1,
+		logger:   logger,
 	}
 	if err := storage.load(); err != nil {
 		return nil, err
@@ -82,9 +86,8 @@ func (s *File) load() error {
 		return fmt.Errorf("open storage file: %w", err)
 	}
 	defer func(file *os.File) {
-		err := file.Close()
-		if err != nil {
-
+		if err := file.Close(); err != nil {
+			s.logger.Error().Err(err).Str("path", s.path).Msg("failed to close storage file")
 		}
 	}(file)
 
@@ -142,9 +145,8 @@ func (s *File) persist(records []fileRecord) error {
 	}
 	temporaryPath := temporary.Name()
 	defer func(name string) {
-		err := os.Remove(name)
-		if err != nil {
-
+		if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+			s.logger.Error().Err(err).Str("path", name).Msg("failed to remove temporary storage file")
 		}
 	}(temporaryPath)
 

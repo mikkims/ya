@@ -109,8 +109,8 @@ func TestCreateShortURLJSON(t *testing.T) {
 			if tt.wantStatus != http.StatusCreated {
 				return
 			}
-			if contentType := response.Header().Get("Content-Type"); contentType != "application/json" {
-				t.Errorf("Content-Type = %q, want %q", contentType, "application/json")
+			if contentType := response.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "application/json") {
+				t.Errorf("Content-Type = %q, want application/json", contentType)
 			}
 
 			var result dto.ShortenResponse
