@@ -19,6 +19,18 @@ type pingerStub struct {
 	called bool
 }
 
+type shortenerStub struct {
+	getErr error
+}
+
+func (s *shortenerStub) Save(_ context.Context, _ string) (string, error) {
+	return "unused", nil
+}
+
+func (s *shortenerStub) Get(_ context.Context, _ string) (string, bool, error) {
+	return "", false, s.getErr
+}
+
 func (p *pingerStub) PingContext(ctx context.Context) error {
 	p.called = true
 	if ctx == nil {
@@ -239,5 +251,17 @@ func TestGetOriginalURL(t *testing.T) {
 				return
 			}
 		})
+	}
+}
+
+func TestGetOriginalURLStorageError(t *testing.T) {
+	router := NewRouter("http://localhost:8080", &shortenerStub{getErr: errors.New("storage unavailable")})
+	request := httptest.NewRequest(http.MethodGet, "/known", nil)
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusInternalServerError)
 	}
 }

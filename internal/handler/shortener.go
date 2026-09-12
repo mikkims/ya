@@ -10,8 +10,8 @@ import (
 )
 
 type URLShortener interface {
-	Save(originalURL string) (string, error)
-	Get(id string) (string, bool)
+	Save(ctx context.Context, originalURL string) (string, error)
+	Get(ctx context.Context, id string) (string, bool, error)
 }
 
 type Pinger interface {
@@ -61,7 +61,7 @@ func (h *handler) createShortURLJSON(c *gin.Context) {
 		return
 	}
 
-	id, err := h.service.Save(request.URL)
+	id, err := h.service.Save(c.Request.Context(), request.URL)
 	if err != nil {
 		internalServerError(c)
 		return
@@ -91,7 +91,7 @@ func (h *handler) createShortURL(c *gin.Context) {
 		return
 	}
 
-	id, err := h.service.Save(string(body))
+	id, err := h.service.Save(c.Request.Context(), string(body))
 	if err != nil {
 		internalServerError(c)
 		return
@@ -107,7 +107,11 @@ func (h *handler) createShortURL(c *gin.Context) {
 
 func (h *handler) getOriginalURL(c *gin.Context) {
 	id := c.Param("id")
-	originalURL, ok := h.service.Get(id)
+	originalURL, ok, err := h.service.Get(c.Request.Context(), id)
+	if err != nil {
+		internalServerError(c)
+		return
+	}
 	if !ok {
 		badRequest(c)
 		return

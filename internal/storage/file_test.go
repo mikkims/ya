@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -15,10 +16,10 @@ func TestFilePersistsAndRestoresURLs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create storage: %v", err)
 	}
-	if err := storage.Save("4rSPg8ap", "http://yandex.ru"); err != nil {
+	if err := storage.Save(context.Background(), "4rSPg8ap", "http://yandex.ru"); err != nil {
 		t.Fatalf("save first URL: %v", err)
 	}
-	if err := storage.Save("edVPg3ks", "http://ya.ru"); err != nil {
+	if err := storage.Save(context.Background(), "edVPg3ks", "http://ya.ru"); err != nil {
 		t.Fatalf("save second URL: %v", err)
 	}
 
@@ -30,7 +31,8 @@ func TestFilePersistsAndRestoresURLs(t *testing.T) {
 		"4rSPg8ap": "http://yandex.ru",
 		"edVPg3ks": "http://ya.ru",
 	} {
-		if got, ok := restored.Get(id); !ok || got != want {
+		got, ok, err := restored.Get(context.Background(), id)
+		if err != nil || !ok || got != want {
 			t.Errorf("Get(%q) = %q, %v; want %q, true", id, got, ok, want)
 		}
 	}
@@ -53,10 +55,10 @@ func TestFileRejectsDuplicateID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create storage: %v", err)
 	}
-	if err := storage.Save("duplicate", "http://first.example"); err != nil {
+	if err := storage.Save(context.Background(), "duplicate", "http://first.example"); err != nil {
 		t.Fatalf("save URL: %v", err)
 	}
-	if err := storage.Save("duplicate", "http://second.example"); err != ErrIDExists {
+	if err := storage.Save(context.Background(), "duplicate", "http://second.example"); err != ErrIDExists {
 		t.Errorf("Save duplicate error = %v, want %v", err, ErrIDExists)
 	}
 }

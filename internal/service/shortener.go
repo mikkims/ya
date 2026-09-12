@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"math/rand"
 
@@ -20,8 +21,8 @@ type Shortener struct {
 }
 
 type URLStorage interface {
-	Save(id, originalURL string) error
-	Get(id string) (string, bool)
+	Save(ctx context.Context, id, originalURL string) error
+	Get(ctx context.Context, id string) (string, bool, error)
 }
 
 func NewShortener(storage URLStorage) *Shortener {
@@ -30,10 +31,10 @@ func NewShortener(storage URLStorage) *Shortener {
 	}
 }
 
-func (s *Shortener) Save(originalURL string) (string, error) {
+func (s *Shortener) Save(ctx context.Context, originalURL string) (string, error) {
 	for range maxSaveAttempts {
 		id := generateID()
-		err := s.storage.Save(id, originalURL)
+		err := s.storage.Save(ctx, id, originalURL)
 		if errors.Is(err, storage.ErrIDExists) {
 			continue
 		}
@@ -47,8 +48,8 @@ func (s *Shortener) Save(originalURL string) (string, error) {
 	return "", ErrSaveAttemptsExceeded
 }
 
-func (s *Shortener) Get(id string) (string, bool) {
-	return s.storage.Get(id)
+func (s *Shortener) Get(ctx context.Context, id string) (string, bool, error) {
+	return s.storage.Get(ctx, id)
 }
 
 func generateID() string {

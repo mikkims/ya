@@ -13,7 +13,7 @@ func TestFileStoragePathPriority(t *testing.T) {
 		envValue string
 		want     string
 	}{
-		{name: "default", want: DefaultFileStoragePath},
+		{name: "default", want: ""},
 		{name: "flag", args: []string{"-f", "flag-storage.json"}, want: "flag-storage.json"},
 		{name: "environment", args: []string{"-f", "flag-storage.json"}, envValue: "env-storage.json", want: "env-storage.json"},
 	}

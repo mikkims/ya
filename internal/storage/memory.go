@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"sync"
 )
@@ -18,7 +19,7 @@ func NewMemory() *Memory {
 	}
 }
 
-func (s *Memory) Save(id, originalURL string) error {
+func (s *Memory) Save(_ context.Context, id, originalURL string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -30,10 +31,10 @@ func (s *Memory) Save(id, originalURL string) error {
 	return nil
 }
 
-func (s *Memory) Get(id string) (string, bool) {
+func (s *Memory) Get(_ context.Context, id string) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	originalURL, ok := s.urls[id]
-	return originalURL, ok
+	return originalURL, ok, nil
 }

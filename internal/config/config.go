@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-const DefaultFileStoragePath = "short-url-storage.json"
+const DefaultFileStoragePath = ""
 
 type Config struct {
 	ServerAddress   string
