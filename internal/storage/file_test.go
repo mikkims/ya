@@ -1,7 +1,9 @@
 package storage
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -15,10 +17,10 @@ func TestFilePersistsAndRestoresURLs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create storage: %v", err)
 	}
-	if err := storage.Save("4rSPg8ap", "http://yandex.ru"); err != nil {
+	if err := storage.Save(context.Background(), "4rSPg8ap", "http://yandex.ru"); err != nil {
 		t.Fatalf("save first URL: %v", err)
 	}
-	if err := storage.Save("edVPg3ks", "http://ya.ru"); err != nil {
+	if err := storage.Save(context.Background(), "edVPg3ks", "http://ya.ru"); err != nil {
 		t.Fatalf("save second URL: %v", err)
 	}
 
@@ -30,7 +32,8 @@ func TestFilePersistsAndRestoresURLs(t *testing.T) {
 		"4rSPg8ap": "http://yandex.ru",
 		"edVPg3ks": "http://ya.ru",
 	} {
-		if got, ok := restored.Get(id); !ok || got != want {
+		got, ok, err := restored.Get(context.Background(), id)
+		if err != nil || !ok || got != want {
 			t.Errorf("Get(%q) = %q, %v; want %q, true", id, got, ok, want)
 		}
 	}
@@ -53,11 +56,47 @@ func TestFileRejectsDuplicateID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create storage: %v", err)
 	}
-	if err := storage.Save("duplicate", "http://first.example"); err != nil {
+	if err := storage.Save(context.Background(), "duplicate", "http://first.example"); err != nil {
 		t.Fatalf("save URL: %v", err)
 	}
-	if err := storage.Save("duplicate", "http://second.example"); err != ErrIDExists {
+	if err := storage.Save(context.Background(), "duplicate", "http://second.example"); err != ErrIDExists {
 		t.Errorf("Save duplicate error = %v, want %v", err, ErrIDExists)
+	}
+}
+
+func TestFileSaveBatchPersistsOnceAndIsAtomic(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "urls.json")
+	store, err := NewFile(path, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("create storage: %v", err)
+	}
+	if err := store.SaveBatch(ctx, []URL{
+		{ID: "first", OriginalURL: "https://first.example"},
+		{ID: "second", OriginalURL: "https://second.example"},
+	}); err != nil {
+		t.Fatalf("SaveBatch() error = %v", err)
+	}
+
+	restored, err := NewFile(path, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("restore storage: %v", err)
+	}
+	for _, id := range []string{"first", "second"} {
+		if _, ok, err := restored.Get(ctx, id); err != nil || !ok {
+			t.Fatalf("Get(%q): ok=%v, err=%v", id, ok, err)
+		}
+	}
+
+	err = store.SaveBatch(ctx, []URL{
+		{ID: "third", OriginalURL: "https://third.example"},
+		{ID: "first", OriginalURL: "https://duplicate.example"},
+	})
+	if !errors.Is(err, ErrIDExists) {
+		t.Fatalf("SaveBatch() error = %v, want %v", err, ErrIDExists)
+	}
+	if _, ok, err := store.Get(ctx, "third"); err != nil || ok {
+		t.Fatalf("partially saved URL: ok=%v, err=%v", ok, err)
 	}
 }
 

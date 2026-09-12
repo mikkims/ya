@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,7 +46,7 @@ func NewFile(path string, logger zerolog.Logger) (*File, error) {
 	return storage, nil
 }
 
-func (s *File) Save(id, originalURL string) error {
+func (s *File) Save(_ context.Context, id, originalURL string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -69,12 +70,47 @@ func (s *File) Save(id, originalURL string) error {
 	return nil
 }
 
-func (s *File) Get(id string) (string, bool) {
+func (s *File) SaveBatch(_ context.Context, urls []URL) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ids := make(map[string]struct{}, len(urls))
+	for _, url := range urls {
+		if _, exists := s.urls[url.ID]; exists {
+			return ErrIDExists
+		}
+		if _, exists := ids[url.ID]; exists {
+			return ErrIDExists
+		}
+		ids[url.ID] = struct{}{}
+	}
+
+	records := append([]fileRecord(nil), s.records...)
+	for i, url := range urls {
+		records = append(records, fileRecord{
+			UUID:        strconv.Itoa(s.nextUUID + i),
+			ShortURL:    url.ID,
+			OriginalURL: url.OriginalURL,
+		})
+	}
+	if err := s.persist(records); err != nil {
+		return err
+	}
+
+	for _, url := range urls {
+		s.urls[url.ID] = url.OriginalURL
+	}
+	s.records = records
+	s.nextUUID += len(urls)
+	return nil
+}
+
+func (s *File) Get(_ context.Context, id string) (string, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	originalURL, ok := s.urls[id]
-	return originalURL, ok
+	return originalURL, ok, nil
 }
 
 func (s *File) load() error {
