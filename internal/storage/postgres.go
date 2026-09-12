@@ -9,6 +9,11 @@ import (
 	"github.com/lib/pq"
 )
 
+const (
+	shortURLPrimaryKeyConstraint = "urls_pkey"
+	originalURLUniqueConstraint  = "idx_urls_original_url_unique"
+)
+
 type PostgreSQL struct {
 	db *sql.DB
 }
@@ -29,7 +34,12 @@ func (s *PostgreSQL) Save(ctx context.Context, id, originalURL string) error {
 
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) && pqErr.Code == "23505" {
-		return ErrIDExists
+		switch pqErr.Constraint {
+		case shortURLPrimaryKeyConstraint:
+			return ErrIDExists
+		case originalURLUniqueConstraint:
+			return s.originalURLExistsError(ctx, originalURL)
+		}
 	}
 
 	return fmt.Errorf("save URL: %w", err)
@@ -54,7 +64,12 @@ func (s *PostgreSQL) SaveBatch(ctx context.Context, urls []URL) (err error) {
 		); err != nil {
 			var pqErr *pq.Error
 			if errors.As(err, &pqErr) && pqErr.Code == "23505" {
-				return ErrIDExists
+				switch pqErr.Constraint {
+				case shortURLPrimaryKeyConstraint:
+					return ErrIDExists
+				case originalURLUniqueConstraint:
+					return &OriginalURLExistsError{}
+				}
 			}
 			return fmt.Errorf("save URL batch: %w", err)
 		}
@@ -64,6 +79,17 @@ func (s *PostgreSQL) SaveBatch(ctx context.Context, urls []URL) (err error) {
 		return fmt.Errorf("commit URL batch: %w", err)
 	}
 	return nil
+}
+
+func (s *PostgreSQL) originalURLExistsError(ctx context.Context, originalURL string) error {
+	var id string
+	if err := s.db.QueryRowContext(ctx,
+		"SELECT short_url FROM urls WHERE original_url = $1",
+		originalURL,
+	).Scan(&id); err != nil {
+		return fmt.Errorf("get existing short URL: %w", err)
+	}
+	return &OriginalURLExistsError{ID: id}
 }
 
 func (s *PostgreSQL) Get(ctx context.Context, id string) (string, bool, error) {

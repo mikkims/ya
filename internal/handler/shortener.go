@@ -2,11 +2,13 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 
 	"github.com/gin-gonic/gin"
 	"github.com/mikkims/ya/internal/model/dto"
+	"github.com/mikkims/ya/internal/service"
 )
 
 type URLShortener interface {
@@ -102,7 +104,10 @@ func (h *handler) createShortURLJSON(c *gin.Context) {
 	}
 
 	id, err := h.service.Save(c.Request.Context(), request.URL)
-	if err != nil {
+	status := http.StatusCreated
+	if errors.Is(err, service.ErrOriginalURLExists) {
+		status = http.StatusConflict
+	} else if err != nil {
 		internalServerError(c)
 		return
 	}
@@ -113,7 +118,7 @@ func (h *handler) createShortURLJSON(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, dto.ShortenResponse{Result: shortURL})
+	c.JSON(status, dto.ShortenResponse{Result: shortURL})
 }
 
 func badRequest(c *gin.Context) {
@@ -132,7 +137,10 @@ func (h *handler) createShortURL(c *gin.Context) {
 	}
 
 	id, err := h.service.Save(c.Request.Context(), string(body))
-	if err != nil {
+	status := http.StatusCreated
+	if errors.Is(err, service.ErrOriginalURLExists) {
+		status = http.StatusConflict
+	} else if err != nil {
 		internalServerError(c)
 		return
 	}
@@ -142,7 +150,7 @@ func (h *handler) createShortURL(c *gin.Context) {
 		badRequest(c)
 		return
 	}
-	c.Data(http.StatusCreated, "text/plain", []byte(shortURL))
+	c.Data(status, "text/plain", []byte(shortURL))
 }
 
 func (h *handler) getOriginalURL(c *gin.Context) {

@@ -51,7 +51,7 @@ func TestPostgreSQLSaveDuplicate(t *testing.T) {
 	store, mock := newPostgreSQLMock(t)
 	mock.ExpectExec(regexp.QuoteMeta(insertURLQuery)).
 		WithArgs("short-id", "https://example.com").
-		WillReturnError(&pq.Error{Code: "23505"})
+		WillReturnError(&pq.Error{Code: "23505", Constraint: shortURLPrimaryKeyConstraint})
 
 	err := store.Save(context.Background(), "short-id", "https://example.com")
 	if !errors.Is(err, ErrIDExists) {
@@ -98,7 +98,7 @@ func TestPostgreSQLSaveBatchRollsBack(t *testing.T) {
 		dbErr   error
 		wantErr error
 	}{
-		{name: "duplicate", dbErr: &pq.Error{Code: "23505"}, wantErr: ErrIDExists},
+		{name: "duplicate", dbErr: &pq.Error{Code: "23505", Constraint: shortURLPrimaryKeyConstraint}, wantErr: ErrIDExists},
 		{name: "database error", dbErr: errors.New("database unavailable"), wantErr: errors.New("database unavailable")},
 	}
 
@@ -128,6 +128,38 @@ func TestPostgreSQLSaveBatchRollsBack(t *testing.T) {
 				t.Fatalf("SaveBatch() error = %v, want %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestPostgreSQLSaveOriginalURLExists(t *testing.T) {
+	store, mock := newPostgreSQLMock(t)
+	mock.ExpectExec(regexp.QuoteMeta(insertURLQuery)).
+		WithArgs("new-id", "https://example.com").
+		WillReturnError(&pq.Error{Code: "23505", Constraint: originalURLUniqueConstraint})
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT short_url FROM urls WHERE original_url = $1")).
+		WithArgs("https://example.com").
+		WillReturnRows(sqlmock.NewRows([]string{"short_url"}).AddRow("existing-id"))
+
+	err := store.Save(context.Background(), "new-id", "https://example.com")
+	var conflict *OriginalURLExistsError
+	if !errors.As(err, &conflict) || conflict.ID != "existing-id" {
+		t.Fatalf("Save() error = %#v, want existing ID", err)
+	}
+}
+
+func TestPostgreSQLSaveOriginalURLLookupError(t *testing.T) {
+	store, mock := newPostgreSQLMock(t)
+	wantErr := errors.New("lookup unavailable")
+	mock.ExpectExec(regexp.QuoteMeta(insertURLQuery)).
+		WithArgs("new-id", "https://example.com").
+		WillReturnError(&pq.Error{Code: "23505", Constraint: originalURLUniqueConstraint})
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT short_url FROM urls WHERE original_url = $1")).
+		WithArgs("https://example.com").
+		WillReturnError(wantErr)
+
+	err := store.Save(context.Background(), "new-id", "https://example.com")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Save() error = %v, want wrapped %v", err, wantErr)
 	}
 }
 

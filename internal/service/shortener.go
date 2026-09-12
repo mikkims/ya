@@ -17,6 +17,7 @@ const (
 var (
 	ErrSaveAttemptsExceeded = errors.New("failed to save short URL after maximum attempts")
 	ErrEmptyBatch           = errors.New("URL batch is empty")
+	ErrOriginalURLExists    = errors.New("original URL already exists")
 )
 
 type Shortener struct {
@@ -70,6 +71,10 @@ func (s *Shortener) Save(ctx context.Context, originalURL string) (string, error
 	for range maxSaveAttempts {
 		id := s.generateID()
 		err := s.storage.Save(ctx, id, originalURL)
+		var originalURLExists *storage.OriginalURLExistsError
+		if errors.As(err, &originalURLExists) {
+			return originalURLExists.ID, ErrOriginalURLExists
+		}
 		if errors.Is(err, storage.ErrIDExists) {
 			continue
 		}

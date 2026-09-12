@@ -10,7 +10,7 @@ import (
 )
 
 type storageStub struct {
-	saveErr       error
+	saveErrs      []error
 	saveBatchErrs []error
 	savedBatches  [][]storage.URL
 	getURL        string
@@ -78,8 +78,11 @@ func TestShortenerSaveBatchErrors(t *testing.T) {
 		want  error
 	}{
 		{name: "empty", want: ErrEmptyBatch},
-		{name: "storage", urls: []string{"https://example.com"}, store: &storageStub{saveBatchErrs: []error{storageErr}}, want: storageErr},
-		{name: "collisions exhausted", urls: []string{"https://example.com"}, store: &storageStub{saveBatchErrs: []error{storage.ErrIDExists, storage.ErrIDExists, storage.ErrIDExists}}, want: ErrSaveAttemptsExceeded},
+		{name: "storage", urls: []string{"https://example.com"}, store: &storageStub{saveBatchErrs: []error{storageErr}},
+			want: storageErr},
+		{name: "collisions exhausted", urls: []string{"https://example.com"},
+			store: &storageStub{saveBatchErrs: []error{storage.ErrIDExists, storage.ErrIDExists, storage.ErrIDExists}},
+			want:  ErrSaveAttemptsExceeded},
 	}
 
 	for _, tt := range tests {
@@ -98,7 +101,12 @@ func TestShortenerSaveBatchErrors(t *testing.T) {
 }
 
 func (s *storageStub) Save(_ context.Context, _, _ string) error {
-	return s.saveErr
+	if len(s.saveErrs) == 0 {
+		return nil
+	}
+	err := s.saveErrs[0]
+	s.saveErrs = s.saveErrs[1:]
+	return err
 }
 
 func (s *storageStub) Get(_ context.Context, _ string) (string, bool, error) {
@@ -112,5 +120,29 @@ func TestShortenerGetPropagatesStorageError(t *testing.T) {
 	_, _, err := shortener.Get(context.Background(), "id")
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Get() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestShortenerReturnsExistingIDForOriginalURL(t *testing.T) {
+	shortener := NewShortener(&storageStub{saveErrs: []error{&storage.OriginalURLExistsError{ID: "existing-id"}}})
+
+	id, err := shortener.Save(context.Background(), "https://example.com")
+	if !errors.Is(err, ErrOriginalURLExists) || id != "existing-id" {
+		t.Fatalf("Save() = %q, %v; want existing-id, %v", id, err, ErrOriginalURLExists)
+	}
+}
+
+func TestShortenerRetriesShortIDConflict(t *testing.T) {
+	shortener := NewShortener(&storageStub{saveErrs: []error{storage.ErrIDExists, nil}})
+	generated := []string{"conflicting-id", "new-id"}
+	shortener.generateID = func() string {
+		id := generated[0]
+		generated = generated[1:]
+		return id
+	}
+
+	id, err := shortener.Save(context.Background(), "https://example.com")
+	if err != nil || id != "new-id" {
+		t.Fatalf("Save() = %q, %v; want new-id, nil", id, err)
 	}
 }

@@ -42,3 +42,17 @@ func TestMemorySaveBatchConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestMemoryRejectsDuplicateOriginalURL(t *testing.T) {
+	store := NewMemory()
+	ctx := context.Background()
+	if err := store.Save(ctx, "existing-id", "https://example.com"); err != nil {
+		t.Fatalf("prepare storage: %v", err)
+	}
+
+	err := store.Save(ctx, "new-id", "https://example.com")
+	var conflict *OriginalURLExistsError
+	if !errors.As(err, &conflict) || conflict.ID != "existing-id" {
+		t.Fatalf("Save() error = %#v, want existing ID", err)
+	}
+}

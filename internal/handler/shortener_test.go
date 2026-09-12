@@ -26,6 +26,8 @@ type pingerStub struct {
 }
 
 type shortenerStub struct {
+	saveID    string
+	saveErr   error
 	batchIDs  []string
 	batchErr  error
 	batchURLs []string
@@ -38,7 +40,45 @@ func (s *shortenerStub) SaveBatch(_ context.Context, originalURLs []string) ([]s
 }
 
 func (s *shortenerStub) Save(_ context.Context, _ string) (string, error) {
-	return "unused", nil
+	return s.saveID, s.saveErr
+}
+
+func TestCreateShortURLConflict(t *testing.T) {
+	shortener := &shortenerStub{saveID: "existing-id", saveErr: service.ErrOriginalURLExists}
+	router := NewRouter("http://localhost:8080", shortener)
+
+	tests := []struct {
+		name        string
+		path        string
+		contentType string
+		wantType    string
+		body        string
+		wantBody    string
+	}{
+		{name: "plain", path: "/", contentType: "text/plain", wantType: "text/plain", body: "https://example.com",
+			wantBody: "http://localhost:8080/existing-id"},
+		{name: "json", path: "/api/shorten", contentType: "application/json", wantType: "application/json",
+			body: `{"url":"https://example.com"}`, wantBody: `{"result":"http://localhost:8080/existing-id"}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
+			request.Header.Set("Content-Type", tt.contentType)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+
+			if response.Code != http.StatusConflict {
+				t.Fatalf("status = %d, want %d", response.Code, http.StatusConflict)
+			}
+			if contentType := response.Header().Get("Content-Type"); !strings.HasPrefix(contentType, tt.wantType) {
+				t.Fatalf("Content-Type = %q, want prefix %q", contentType, tt.wantType)
+			}
+			if strings.TrimSpace(response.Body.String()) != tt.wantBody {
+				t.Fatalf("body = %q, want %q", response.Body.String(), tt.wantBody)
+			}
+		})
+	}
 }
 
 func (s *shortenerStub) Get(_ context.Context, _ string) (string, bool, error) {
@@ -61,7 +101,8 @@ func TestPingDatabase(t *testing.T) {
 		wantCall   bool
 	}{
 		{name: "success", pinger: &pingerStub{}, wantStatus: http.StatusOK, wantCall: true},
-		{name: "database error", pinger: &pingerStub{err: errors.New("database unavailable")}, wantStatus: http.StatusInternalServerError, wantCall: true},
+		{name: "database error", pinger: &pingerStub{err: errors.New("database unavailable")},
+			wantStatus: http.StatusInternalServerError, wantCall: true},
 		{name: "database is not configured", wantStatus: http.StatusInternalServerError},
 	}
 

@@ -100,6 +100,28 @@ func TestFileSaveBatchPersistsOnceAndIsAtomic(t *testing.T) {
 	}
 }
 
+func TestFileRejectsDuplicateOriginalURLAfterReload(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "urls.json")
+	store, err := NewFile(path, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("create storage: %v", err)
+	}
+	if err := store.Save(ctx, "existing-id", "https://example.com"); err != nil {
+		t.Fatalf("prepare storage: %v", err)
+	}
+
+	restored, err := NewFile(path, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("reload storage: %v", err)
+	}
+	err = restored.Save(ctx, "new-id", "https://example.com")
+	var conflict *OriginalURLExistsError
+	if !errors.As(err, &conflict) || conflict.ID != "existing-id" {
+		t.Fatalf("Save() error = %#v, want existing ID", err)
+	}
+}
+
 func TestNewFileRejectsInvalidJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "urls.json")
 	if err := os.WriteFile(path, []byte("not-json"), 0o600); err != nil {
