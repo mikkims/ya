@@ -1,17 +1,23 @@
 package handler
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
+	appgzip "github.com/mikkims/ya/internal/gzip"
 	"github.com/mikkims/ya/internal/model/dto"
 	"github.com/mikkims/ya/internal/service"
 	"github.com/mikkims/ya/internal/storage"
+	"github.com/rs/zerolog"
 )
 
 type pingerStub struct {
@@ -20,7 +26,15 @@ type pingerStub struct {
 }
 
 type shortenerStub struct {
-	getErr error
+	batchIDs  []string
+	batchErr  error
+	batchURLs []string
+	getErr    error
+}
+
+func (s *shortenerStub) SaveBatch(_ context.Context, originalURLs []string) ([]string, error) {
+	s.batchURLs = append([]string(nil), originalURLs...)
+	return s.batchIDs, s.batchErr
 }
 
 func (s *shortenerStub) Save(_ context.Context, _ string) (string, error) {
@@ -188,6 +202,111 @@ func TestCreateShortURLJSON(t *testing.T) {
 				t.Errorf("short URL ID must contain %d characters", expectedIDLength)
 			}
 		})
+	}
+}
+
+func TestCreateShortURLBatch(t *testing.T) {
+	shortener := &shortenerStub{batchIDs: []string{"first-id", "second-id"}}
+	router := NewRouter("http://localhost:8080", shortener)
+	request := httptest.NewRequest(http.MethodPost, "/api/shorten/batch", strings.NewReader(`[
+        {"correlation_id":"first","original_url":"https://first.example"},
+        {"correlation_id":"second","original_url":"https://second.example"}
+    ]`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusCreated)
+	}
+	if contentType := response.Header().Get("Content-Type"); !strings.HasPrefix(contentType, "application/json") {
+		t.Fatalf("Content-Type = %q, want application/json", contentType)
+	}
+	var got []dto.BatchShortenResponse
+	if err := json.NewDecoder(response.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	want := []dto.BatchShortenResponse{
+		{CorrelationID: "first", ShortURL: "http://localhost:8080/first-id"},
+		{CorrelationID: "second", ShortURL: "http://localhost:8080/second-id"},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("response = %#v, want %#v", got, want)
+	}
+	if !slices.Equal(shortener.batchURLs, []string{"https://first.example", "https://second.example"}) {
+		t.Fatalf("saved URLs = %v", shortener.batchURLs)
+	}
+}
+
+func TestCreateShortURLBatchRejectsInvalidRequest(t *testing.T) {
+	for _, body := range []string{"[]", `[{"correlation_id":"first","original_url":""}]`, `[{`} {
+		t.Run(body, func(t *testing.T) {
+			shortener := &shortenerStub{}
+			router := NewRouter("http://localhost:8080", shortener)
+			request := httptest.NewRequest(http.MethodPost, "/api/shorten/batch", strings.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			router.ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+			}
+			if shortener.batchURLs != nil {
+				t.Fatalf("SaveBatch called with %v", shortener.batchURLs)
+			}
+		})
+	}
+}
+
+func TestCreateShortURLBatchStorageError(t *testing.T) {
+	shortener := &shortenerStub{batchErr: errors.New("storage unavailable")}
+	router := NewRouter("http://localhost:8080", shortener)
+	request := httptest.NewRequest(http.MethodPost, "/api/shorten/batch", strings.NewReader(`[{"original_url":"https://example.com"}]`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestCreateShortURLBatchGzip(t *testing.T) {
+	shortener := &shortenerStub{batchIDs: []string{"short-id"}}
+	router := appgzip.MiddlewareGzip(zerolog.Nop())(NewRouter("http://localhost:8080", shortener))
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write([]byte(`[{"correlation_id":"one","original_url":"https://example.com"}]`)); err != nil {
+		t.Fatalf("compress request: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close request compressor: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/api/shorten/batch", &compressed)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Content-Encoding", "gzip")
+	request.Header.Set("Accept-Encoding", "gzip")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated || response.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("status = %d, encoding = %q", response.Code, response.Header().Get("Content-Encoding"))
+	}
+	reader, err := gzip.NewReader(response.Body)
+	if err != nil {
+		t.Fatalf("open compressed response: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read compressed response: %v", err)
+	}
+	if !bytes.Contains(body, []byte(`"correlation_id":"one"`)) {
+		t.Fatalf("response body = %s", body)
 	}
 }
 

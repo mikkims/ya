@@ -35,6 +35,37 @@ func (s *PostgreSQL) Save(ctx context.Context, id, originalURL string) error {
 	return fmt.Errorf("save URL: %w", err)
 }
 
+func (s *PostgreSQL) SaveBatch(ctx context.Context, urls []URL) (err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin URL batch transaction: %w", err)
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) && err == nil {
+			err = fmt.Errorf("rollback URL batch transaction: %w", rollbackErr)
+		}
+	}()
+
+	for _, url := range urls {
+		if _, err = tx.ExecContext(ctx,
+			"INSERT INTO urls (short_url, original_url) VALUES ($1, $2)",
+			url.ID,
+			url.OriginalURL,
+		); err != nil {
+			var pqErr *pq.Error
+			if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+				return ErrIDExists
+			}
+			return fmt.Errorf("save URL batch: %w", err)
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit URL batch: %w", err)
+	}
+	return nil
+}
+
 func (s *PostgreSQL) Get(ctx context.Context, id string) (string, bool, error) {
 	var originalURL string
 	err := s.db.QueryRowContext(ctx,

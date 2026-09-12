@@ -72,6 +72,91 @@ func TestPostgreSQLSaveError(t *testing.T) {
 	}
 }
 
+func TestPostgreSQLSaveBatchCommits(t *testing.T) {
+	store, mock := newPostgreSQLMock(t)
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(insertURLQuery)).
+		WithArgs("first", "https://first.example").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta(insertURLQuery)).
+		WithArgs("second", "https://second.example").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	err := store.SaveBatch(context.Background(), []URL{
+		{ID: "first", OriginalURL: "https://first.example"},
+		{ID: "second", OriginalURL: "https://second.example"},
+	})
+	if err != nil {
+		t.Fatalf("SaveBatch() error = %v", err)
+	}
+}
+
+func TestPostgreSQLSaveBatchRollsBack(t *testing.T) {
+	tests := []struct {
+		name    string
+		dbErr   error
+		wantErr error
+	}{
+		{name: "duplicate", dbErr: &pq.Error{Code: "23505"}, wantErr: ErrIDExists},
+		{name: "database error", dbErr: errors.New("database unavailable"), wantErr: errors.New("database unavailable")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, mock := newPostgreSQLMock(t)
+			mock.ExpectBegin()
+			mock.ExpectExec(regexp.QuoteMeta(insertURLQuery)).
+				WithArgs("first", "https://first.example").
+				WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec(regexp.QuoteMeta(insertURLQuery)).
+				WithArgs("second", "https://second.example").
+				WillReturnError(tt.dbErr)
+			mock.ExpectRollback()
+
+			err := store.SaveBatch(context.Background(), []URL{
+				{ID: "first", OriginalURL: "https://first.example"},
+				{ID: "second", OriginalURL: "https://second.example"},
+			})
+			if tt.name == "database error" {
+				if err == nil || err.Error() != "save URL batch: "+tt.wantErr.Error() {
+					t.Fatalf("SaveBatch() error = %v, want wrapped %v", err, tt.wantErr)
+				}
+				return
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("SaveBatch() error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestPostgreSQLSaveBatchBeginError(t *testing.T) {
+	store, mock := newPostgreSQLMock(t)
+	wantErr := errors.New("begin unavailable")
+	mock.ExpectBegin().WillReturnError(wantErr)
+
+	err := store.SaveBatch(context.Background(), []URL{{ID: "first", OriginalURL: "https://first.example"}})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("SaveBatch() error = %v, want wrapped %v", err, wantErr)
+	}
+}
+
+func TestPostgreSQLSaveBatchCommitError(t *testing.T) {
+	store, mock := newPostgreSQLMock(t)
+	wantErr := errors.New("commit unavailable")
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(insertURLQuery)).
+		WithArgs("first", "https://first.example").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit().WillReturnError(wantErr)
+
+	err := store.SaveBatch(context.Background(), []URL{{ID: "first", OriginalURL: "https://first.example"}})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("SaveBatch() error = %v, want wrapped %v", err, wantErr)
+	}
+}
+
 func TestPostgreSQLGet(t *testing.T) {
 	store, mock := newPostgreSQLMock(t)
 	mock.ExpectQuery(regexp.QuoteMeta(selectURLQuery)).
