@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 
@@ -13,24 +14,44 @@ type URLShortener interface {
 	Get(id string) (string, bool)
 }
 
+type Pinger interface {
+	PingContext(ctx context.Context) error
+}
+
 type handler struct {
-	baseURL string
-	service URLShortener
+	baseURL  string
+	service  URLShortener
+	database Pinger
 }
 
 func NewRouter(baseURL string, service URLShortener) http.Handler {
+	return NewRouterWithDatabase(baseURL, service, nil)
+}
+
+func NewRouterWithDatabase(baseURL string, service URLShortener, database Pinger) http.Handler {
 	h := &handler{
-		baseURL: baseURL,
-		service: service,
+		baseURL:  baseURL,
+		service:  service,
+		database: database,
 	}
 
 	router := gin.New()
 	router.POST("/", h.createShortURL)
 	router.POST("/api/shorten", h.createShortURLJSON)
+	router.GET("/ping", h.pingDatabase)
 	router.GET("/:id", h.getOriginalURL)
 	router.NoRoute(badRequest)
 
 	return router
+}
+
+func (h *handler) pingDatabase(c *gin.Context) {
+	if h.database == nil || h.database.PingContext(c.Request.Context()) != nil {
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+
+	c.Status(http.StatusOK)
 }
 
 func (h *handler) createShortURLJSON(c *gin.Context) {

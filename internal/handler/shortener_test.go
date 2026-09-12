@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +13,55 @@ import (
 	"github.com/mikkims/ya/internal/service"
 	"github.com/mikkims/ya/internal/storage"
 )
+
+type pingerStub struct {
+	err    error
+	called bool
+}
+
+func (p *pingerStub) PingContext(ctx context.Context) error {
+	p.called = true
+	if ctx == nil {
+		return errors.New("nil context")
+	}
+	return p.err
+}
+
+func TestPingDatabase(t *testing.T) {
+	tests := []struct {
+		name       string
+		pinger     *pingerStub
+		wantStatus int
+		wantCall   bool
+	}{
+		{name: "success", pinger: &pingerStub{}, wantStatus: http.StatusOK, wantCall: true},
+		{name: "database error", pinger: &pingerStub{err: errors.New("database unavailable")}, wantStatus: http.StatusInternalServerError, wantCall: true},
+		{name: "database is not configured", wantStatus: http.StatusInternalServerError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			router := NewRouter("http://localhost:8080", service.NewShortener(storage.NewMemory()))
+			if tt.pinger != nil {
+				router = NewRouterWithDatabase("http://localhost:8080", service.NewShortener(storage.NewMemory()), tt.pinger)
+			}
+			request := httptest.NewRequest(http.MethodGet, "/ping", nil)
+			response := httptest.NewRecorder()
+
+			router.ServeHTTP(response, request)
+
+			if response.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d", response.Code, tt.wantStatus)
+			}
+			if response.Body.Len() != 0 {
+				t.Errorf("response body = %q, want empty", response.Body.String())
+			}
+			if tt.pinger != nil && tt.pinger.called != tt.wantCall {
+				t.Errorf("PingContext called = %v, want %v", tt.pinger.called, tt.wantCall)
+			}
+		})
+	}
+}
 
 func TestCreateShortURL(t *testing.T) {
 	const baseURL = "http://localhost:8080/"
@@ -41,7 +92,7 @@ func TestCreateShortURL(t *testing.T) {
 			router.ServeHTTP(response, request)
 
 			result := response.Result()
-			defer result.Body.Close()
+			defer func() { _ = result.Body.Close() }()
 
 			if result.StatusCode != tt.wantStatus {
 				t.Errorf("status = %d, want %d", result.StatusCode, tt.wantStatus)
@@ -177,7 +228,7 @@ func TestGetOriginalURL(t *testing.T) {
 			router.ServeHTTP(response, request)
 
 			result := response.Result()
-			defer result.Body.Close()
+			defer func() { _ = result.Body.Close() }()
 
 			if result.StatusCode != tt.wantStatus {
 				t.Errorf("status = %d, want %d", result.StatusCode, tt.wantStatus)

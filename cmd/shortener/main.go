@@ -1,9 +1,11 @@
 package main
 
 import (
+	"database/sql"
 	"net/http"
 	"os"
 
+	_ "github.com/lib/pq"
 	"github.com/mikkims/ya/internal/config"
 	appgzip "github.com/mikkims/ya/internal/gzip"
 	"github.com/mikkims/ya/internal/handler"
@@ -22,7 +24,24 @@ func main() {
 		return
 	}
 	shortenerService := service.NewShortener(urlStorage)
+	var database *sql.DB
+	if cfg.DatabaseDSN != "" {
+		database, err = sql.Open("postgres", cfg.DatabaseDSN)
+		if err != nil {
+			appLogger.Error().Err(err).Msg("failed to initialize database")
+			return
+		}
+		defer func() {
+			if err := database.Close(); err != nil {
+				appLogger.Error().Err(err).Msg("failed to close database")
+			}
+		}()
+	}
+
 	router := handler.NewRouter(cfg.BaseURL, shortenerService)
+	if database != nil {
+		router = handler.NewRouterWithDatabase(cfg.BaseURL, shortenerService, database)
+	}
 	compressedRouter := appgzip.MiddlewareGzip(appLogger)(router)
 
 	err = http.ListenAndServe(cfg.ServerAddress, logger.Middleware(appLogger)(compressedRouter))
