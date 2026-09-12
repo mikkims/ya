@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,7 +46,7 @@ func NewFile(path string, logger zerolog.Logger) (*File, error) {
 	return storage, nil
 }
 
-func (s *File) Save(id, originalURL string) error {
+func (s *File) Save(_ context.Context, id, originalURL string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -69,12 +70,12 @@ func (s *File) Save(id, originalURL string) error {
 	return nil
 }
 
-func (s *File) Get(id string) (string, bool) {
+func (s *File) Get(_ context.Context, id string) (string, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	originalURL, ok := s.urls[id]
-	return originalURL, ok
+	return originalURL, ok, nil
 }
 
 func (s *File) load() error {
