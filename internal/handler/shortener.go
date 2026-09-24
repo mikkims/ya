@@ -22,6 +22,10 @@ type userURLProvider interface {
 	GetByUser(ctx context.Context, userID string) ([]storage.URL, error)
 }
 
+type userURLDeleter interface {
+	Delete(ids []string, userID string)
+}
+
 type Pinger interface {
 	PingContext(ctx context.Context) error
 }
@@ -49,6 +53,7 @@ func NewRouterWithDatabase(baseURL string, service URLShortener, database Pinger
 	router.POST("/api/shorten", h.createShortURLJSON)
 	router.POST("/api/shorten/batch", h.createShortURLBatch)
 	router.GET("/api/user/urls", h.getUserURLs)
+	router.DELETE("/api/user/urls", h.deleteUserURLs)
 	router.GET("/ping", h.pingDatabase)
 	router.GET("/:id", h.getOriginalURL)
 	router.NoRoute(badRequest)
@@ -92,6 +97,21 @@ func (h *handler) createShortURLBatch(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, response)
+}
+
+func (h *handler) deleteUserURLs(c *gin.Context) {
+	var ids []string
+	if err := c.ShouldBindJSON(&ids); err != nil || len(ids) == 0 {
+		badRequest(c)
+		return
+	}
+	deleter, ok := h.service.(userURLDeleter)
+	if !ok {
+		internalServerError(c)
+		return
+	}
+	deleter.Delete(ids, userID(c))
+	c.Status(http.StatusAccepted)
 }
 
 func (h *handler) pingDatabase(c *gin.Context) {
@@ -164,6 +184,10 @@ func (h *handler) getOriginalURL(c *gin.Context) {
 	id := c.Param("id")
 	originalURL, ok, err := h.service.Get(c.Request.Context(), id)
 	if err != nil {
+		if errors.Is(err, service.ErrURLDeleted) {
+			c.Status(http.StatusGone)
+			return
+		}
 		internalServerError(c)
 		return
 	}

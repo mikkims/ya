@@ -8,12 +8,13 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/jackc/pgerrcode"
 	"github.com/lib/pq"
 )
 
 const (
 	insertURLQuery = "INSERT INTO urls (short_url, original_url) VALUES ($1, $2)"
-	selectURLQuery = "SELECT original_url FROM urls WHERE short_url = $1"
+	selectURLQuery = "SELECT original_url, is_deleted FROM urls WHERE short_url = $1"
 )
 
 func newPostgreSQLMock(t *testing.T) (*PostgreSQL, sqlmock.Sqlmock) {
@@ -51,7 +52,7 @@ func TestPostgreSQLSaveDuplicate(t *testing.T) {
 	store, mock := newPostgreSQLMock(t)
 	mock.ExpectExec(regexp.QuoteMeta(insertURLQuery)).
 		WithArgs("short-id", "https://example.com").
-		WillReturnError(&pq.Error{Code: "23505", Constraint: shortURLPrimaryKeyConstraint})
+		WillReturnError(&pq.Error{Code: pq.ErrorCode(pgerrcode.UniqueViolation), Constraint: shortURLPrimaryKeyConstraint})
 
 	err := store.Save(context.Background(), "short-id", "https://example.com")
 	if !errors.Is(err, ErrIDExists) {
@@ -72,52 +73,45 @@ func TestPostgreSQLSaveError(t *testing.T) {
 	}
 }
 
-func TestPostgreSQLSaveBatchCommits(t *testing.T) {
+func TestPostgreSQLSaveBatchUsesSingleQuery(t *testing.T) {
 	store, mock := newPostgreSQLMock(t)
-	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(insertURLQuery)).
-		WithArgs("first", "https://first.example").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(regexp.QuoteMeta(insertURLQuery)).
-		WithArgs("second", "https://second.example").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
+	query := "INSERT INTO urls (short_url, original_url, user_id) VALUES ($1, $2, $3), ($4, $5, $6) " +
+		"ON CONFLICT (original_url) DO UPDATE SET original_url = EXCLUDED.original_url RETURNING short_url, original_url"
+	mock.ExpectQuery(regexp.QuoteMeta(query)).
+		WithArgs("first", "https://first.example", "user", "second", "https://second.example", "user").
+		WillReturnRows(sqlmock.NewRows([]string{"short_url", "original_url"}).
+			AddRow("first", "https://first.example").
+			AddRow("second", "https://second.example"))
 
-	err := store.SaveBatch(context.Background(), []URL{
-		{ID: "first", OriginalURL: "https://first.example"},
-		{ID: "second", OriginalURL: "https://second.example"},
+	got, err := store.SaveBatch(context.Background(), []URL{
+		{ID: "first", OriginalURL: "https://first.example", UserID: "user"},
+		{ID: "second", OriginalURL: "https://second.example", UserID: "user"},
 	})
-	if err != nil {
-		t.Fatalf("SaveBatch() error = %v", err)
+	if err != nil || len(got) != 2 || got[0].ID != "first" || got[1].ID != "second" {
+		t.Fatalf("SaveBatch() = %#v, %v", got, err)
 	}
 }
 
-func TestPostgreSQLSaveBatchRollsBack(t *testing.T) {
+func TestPostgreSQLSaveBatchErrors(t *testing.T) {
 	tests := []struct {
 		name    string
 		dbErr   error
 		wantErr error
 	}{
-		{name: "duplicate", dbErr: &pq.Error{Code: "23505", Constraint: shortURLPrimaryKeyConstraint}, wantErr: ErrIDExists},
+		{name: "duplicate", dbErr: &pq.Error{Code: pq.ErrorCode(pgerrcode.UniqueViolation), Constraint: shortURLPrimaryKeyConstraint}, wantErr: ErrIDExists},
 		{name: "database error", dbErr: errors.New("database unavailable"), wantErr: errors.New("database unavailable")},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store, mock := newPostgreSQLMock(t)
-			mock.ExpectBegin()
-			mock.ExpectExec(regexp.QuoteMeta(insertURLQuery)).
-				WithArgs("first", "https://first.example").
-				WillReturnResult(sqlmock.NewResult(0, 1))
-			mock.ExpectExec(regexp.QuoteMeta(insertURLQuery)).
-				WithArgs("second", "https://second.example").
+			query := "INSERT INTO urls (short_url, original_url, user_id) VALUES ($1, $2, $3) " +
+				"ON CONFLICT (original_url) DO UPDATE SET original_url = EXCLUDED.original_url RETURNING short_url, original_url"
+			mock.ExpectQuery(regexp.QuoteMeta(query)).
+				WithArgs("first", "https://first.example", "").
 				WillReturnError(tt.dbErr)
-			mock.ExpectRollback()
 
-			err := store.SaveBatch(context.Background(), []URL{
-				{ID: "first", OriginalURL: "https://first.example"},
-				{ID: "second", OriginalURL: "https://second.example"},
-			})
+			_, err := store.SaveBatch(context.Background(), []URL{{ID: "first", OriginalURL: "https://first.example"}})
 			if tt.name == "database error" {
 				if err == nil || err.Error() != "save URL batch: "+tt.wantErr.Error() {
 					t.Fatalf("SaveBatch() error = %v, want wrapped %v", err, tt.wantErr)
@@ -131,11 +125,25 @@ func TestPostgreSQLSaveBatchRollsBack(t *testing.T) {
 	}
 }
 
+func TestPostgreSQLSaveBatchReturnsExistingID(t *testing.T) {
+	store, mock := newPostgreSQLMock(t)
+	query := "INSERT INTO urls (short_url, original_url, user_id) VALUES ($1, $2, $3) " +
+		"ON CONFLICT (original_url) DO UPDATE SET original_url = EXCLUDED.original_url RETURNING short_url, original_url"
+	mock.ExpectQuery(regexp.QuoteMeta(query)).
+		WithArgs("new-id", "https://example.com", "user").
+		WillReturnRows(sqlmock.NewRows([]string{"short_url", "original_url"}).AddRow("existing-id", "https://example.com"))
+
+	got, err := store.SaveBatch(context.Background(), []URL{{ID: "new-id", OriginalURL: "https://example.com", UserID: "user"}})
+	if err != nil || len(got) != 1 || got[0].ID != "existing-id" {
+		t.Fatalf("SaveBatch() = %#v, %v; want existing-id", got, err)
+	}
+}
+
 func TestPostgreSQLSaveOriginalURLExists(t *testing.T) {
 	store, mock := newPostgreSQLMock(t)
 	mock.ExpectExec(regexp.QuoteMeta(insertURLQuery)).
 		WithArgs("new-id", "https://example.com").
-		WillReturnError(&pq.Error{Code: "23505", Constraint: originalURLUniqueConstraint})
+		WillReturnError(&pq.Error{Code: pq.ErrorCode(pgerrcode.UniqueViolation), Constraint: originalURLUniqueConstraint})
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT short_url FROM urls WHERE original_url = $1")).
 		WithArgs("https://example.com").
 		WillReturnRows(sqlmock.NewRows([]string{"short_url"}).AddRow("existing-id"))
@@ -152,7 +160,7 @@ func TestPostgreSQLSaveOriginalURLLookupError(t *testing.T) {
 	wantErr := errors.New("lookup unavailable")
 	mock.ExpectExec(regexp.QuoteMeta(insertURLQuery)).
 		WithArgs("new-id", "https://example.com").
-		WillReturnError(&pq.Error{Code: "23505", Constraint: originalURLUniqueConstraint})
+		WillReturnError(&pq.Error{Code: pq.ErrorCode(pgerrcode.UniqueViolation), Constraint: originalURLUniqueConstraint})
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT short_url FROM urls WHERE original_url = $1")).
 		WithArgs("https://example.com").
 		WillReturnError(wantErr)
@@ -163,41 +171,27 @@ func TestPostgreSQLSaveOriginalURLLookupError(t *testing.T) {
 	}
 }
 
-func TestPostgreSQLSaveBatchBeginError(t *testing.T) {
-	store, mock := newPostgreSQLMock(t)
-	wantErr := errors.New("begin unavailable")
-	mock.ExpectBegin().WillReturnError(wantErr)
-
-	err := store.SaveBatch(context.Background(), []URL{{ID: "first", OriginalURL: "https://first.example"}})
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("SaveBatch() error = %v, want wrapped %v", err, wantErr)
-	}
-}
-
-func TestPostgreSQLSaveBatchCommitError(t *testing.T) {
-	store, mock := newPostgreSQLMock(t)
-	wantErr := errors.New("commit unavailable")
-	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(insertURLQuery)).
-		WithArgs("first", "https://first.example").
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit().WillReturnError(wantErr)
-
-	err := store.SaveBatch(context.Background(), []URL{{ID: "first", OriginalURL: "https://first.example"}})
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("SaveBatch() error = %v, want wrapped %v", err, wantErr)
-	}
-}
-
 func TestPostgreSQLGet(t *testing.T) {
 	store, mock := newPostgreSQLMock(t)
 	mock.ExpectQuery(regexp.QuoteMeta(selectURLQuery)).
 		WithArgs("short-id").
-		WillReturnRows(sqlmock.NewRows([]string{"original_url"}).AddRow("https://example.com"))
+		WillReturnRows(sqlmock.NewRows([]string{"original_url", "is_deleted"}).AddRow("https://example.com", false))
 
 	got, ok, err := store.Get(context.Background(), "short-id")
 	if err != nil || !ok || got != "https://example.com" {
 		t.Fatalf("Get() = %q, %v, %v; want URL, true, nil", got, ok, err)
+	}
+}
+
+func TestPostgreSQLGetDeleted(t *testing.T) {
+	store, mock := newPostgreSQLMock(t)
+	mock.ExpectQuery(regexp.QuoteMeta(selectURLQuery)).
+		WithArgs("short-id").
+		WillReturnRows(sqlmock.NewRows([]string{"original_url", "is_deleted"}).AddRow("https://example.com", true))
+
+	_, ok, err := store.Get(context.Background(), "short-id")
+	if !errors.Is(err, ErrURLDeleted) || ok {
+		t.Fatalf("Get() = ok %v, error %v; want false, %v", ok, err, ErrURLDeleted)
 	}
 }
 

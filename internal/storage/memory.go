@@ -11,6 +11,7 @@ import (
 var (
 	ErrIDExists          = errors.New("short URL ID already exists")
 	ErrOriginalURLExists = errors.New("original URL already exists")
+	ErrURLDeleted        = errors.New("URL is deleted")
 )
 
 type OriginalURLExistsError struct {
@@ -29,6 +30,7 @@ type URL struct {
 	ID          string
 	OriginalURL string
 	UserID      string
+	Deleted     bool
 }
 
 type Memory struct {
@@ -60,34 +62,38 @@ func (s *Memory) Save(ctx context.Context, id, originalURL string) error {
 	return nil
 }
 
-func (s *Memory) SaveBatch(_ context.Context, urls []URL) error {
+func (s *Memory) SaveBatch(_ context.Context, urls []URL) ([]URL, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	ids := make(map[string]struct{}, len(urls))
-	originalURLs := make(map[string]string, len(urls))
-	for _, url := range urls {
+	pending := make(map[string]URL, len(urls))
+	result := make([]URL, len(urls))
+	for i, url := range urls {
 		if existingID, exists := s.originalURLs[url.OriginalURL]; exists {
-			return &OriginalURLExistsError{ID: existingID}
+			result[i] = s.urls[existingID]
+			continue
 		}
-		if existingID, exists := originalURLs[url.OriginalURL]; exists {
-			return &OriginalURLExistsError{ID: existingID}
+		if existingURL, exists := pending[url.OriginalURL]; exists {
+			result[i] = existingURL
+			continue
 		}
 		if _, exists := s.urls[url.ID]; exists {
-			return ErrIDExists
+			return nil, ErrIDExists
 		}
 		if _, exists := ids[url.ID]; exists {
-			return ErrIDExists
+			return nil, ErrIDExists
 		}
 		ids[url.ID] = struct{}{}
-		originalURLs[url.OriginalURL] = url.ID
+		pending[url.OriginalURL] = url
+		result[i] = url
 	}
 
-	for _, url := range urls {
+	for _, url := range pending {
 		s.urls[url.ID] = url
 		s.originalURLs[url.OriginalURL] = url.ID
 	}
-	return nil
+	return result, nil
 }
 
 func (s *Memory) Get(_ context.Context, id string) (string, bool, error) {
@@ -95,6 +101,9 @@ func (s *Memory) Get(_ context.Context, id string) (string, bool, error) {
 	defer s.mu.Unlock()
 
 	storedURL, ok := s.urls[id]
+	if ok && storedURL.Deleted {
+		return "", false, ErrURLDeleted
+	}
 	return storedURL.OriginalURL, ok, nil
 }
 
@@ -104,9 +113,23 @@ func (s *Memory) GetByUser(_ context.Context, userID string) ([]URL, error) {
 
 	urls := make([]URL, 0)
 	for _, storedURL := range s.urls {
-		if storedURL.UserID == userID {
+		if storedURL.UserID == userID && !storedURL.Deleted {
 			urls = append(urls, storedURL)
 		}
 	}
 	return urls, nil
+}
+
+func (s *Memory) Delete(_ context.Context, ids []string, userID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, id := range ids {
+		url, ok := s.urls[id]
+		if ok && url.UserID == userID {
+			url.Deleted = true
+			s.urls[id] = url
+		}
+	}
+	return nil
 }

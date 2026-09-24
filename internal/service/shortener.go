@@ -19,6 +19,7 @@ var (
 	ErrSaveAttemptsExceeded = errors.New("failed to save short URL after maximum attempts")
 	ErrEmptyBatch           = errors.New("URL batch is empty")
 	ErrOriginalURLExists    = errors.New("original URL already exists")
+	ErrURLDeleted           = storage.ErrURLDeleted
 )
 
 type Shortener struct {
@@ -28,12 +29,16 @@ type Shortener struct {
 
 type URLStorage interface {
 	Save(ctx context.Context, id, originalURL string) error
-	SaveBatch(ctx context.Context, urls []storage.URL) error
+	SaveBatch(ctx context.Context, urls []storage.URL) ([]storage.URL, error)
 	Get(ctx context.Context, id string) (string, bool, error)
 }
 
 type userURLStorage interface {
 	GetByUser(ctx context.Context, userID string) ([]storage.URL, error)
+}
+
+type userURLDeleter interface {
+	Delete(ctx context.Context, ids []string, userID string) error
 }
 
 func (s *Shortener) SaveBatch(ctx context.Context, originalURLs []string) ([]string, error) {
@@ -52,12 +57,15 @@ func (s *Shortener) SaveBatch(ctx context.Context, originalURLs []string) ([]str
 			urls[i] = storage.URL{ID: id, OriginalURL: originalURL, UserID: auth.UserID(ctx)}
 		}
 
-		err := s.storage.SaveBatch(ctx, urls)
+		savedURLs, err := s.storage.SaveBatch(ctx, urls)
 		if errors.Is(err, storage.ErrIDExists) {
 			continue
 		}
 		if err != nil {
 			return nil, err
+		}
+		for i := range savedURLs {
+			ids[i] = savedURLs[i].ID
 		}
 		return ids, nil
 	}
@@ -103,6 +111,17 @@ func (s *Shortener) GetByUser(ctx context.Context, userID string) ([]storage.URL
 		return nil, errors.New("storage does not support user URLs")
 	}
 	return storage.GetByUser(ctx, userID)
+}
+
+func (s *Shortener) Delete(ids []string, userID string) {
+	storage, ok := s.storage.(userURLDeleter)
+	if !ok {
+		return
+	}
+	ids = append([]string(nil), ids...)
+	go func() {
+		_ = storage.Delete(context.Background(), ids, userID)
+	}()
 }
 
 func generateID() string {

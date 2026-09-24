@@ -20,6 +20,7 @@ type fileRecord struct {
 	ShortURL    string `json:"short_url"`
 	OriginalURL string `json:"original_url"`
 	UserID      string `json:"user_id,omitempty"`
+	Deleted     bool   `json:"is_deleted,omitempty"`
 }
 
 type File struct {
@@ -79,55 +80,64 @@ func (s *File) Save(ctx context.Context, id, originalURL string) error {
 	return nil
 }
 
-func (s *File) SaveBatch(_ context.Context, urls []URL) error {
+func (s *File) SaveBatch(_ context.Context, urls []URL) ([]URL, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	ids := make(map[string]struct{}, len(urls))
-	originalURLs := make(map[string]string, len(urls))
-	for _, url := range urls {
+	pending := make(map[string]URL, len(urls))
+	result := make([]URL, len(urls))
+	for i, url := range urls {
 		if existingID, exists := s.originalURLs[url.OriginalURL]; exists {
-			return &OriginalURLExistsError{ID: existingID}
+			result[i] = URL{ID: existingID, OriginalURL: url.OriginalURL}
+			continue
 		}
-		if existingID, exists := originalURLs[url.OriginalURL]; exists {
-			return &OriginalURLExistsError{ID: existingID}
+		if existingURL, exists := pending[url.OriginalURL]; exists {
+			result[i] = existingURL
+			continue
 		}
 		if _, exists := s.urls[url.ID]; exists {
-			return ErrIDExists
+			return nil, ErrIDExists
 		}
 		if _, exists := ids[url.ID]; exists {
-			return ErrIDExists
+			return nil, ErrIDExists
 		}
 		ids[url.ID] = struct{}{}
-		originalURLs[url.OriginalURL] = url.ID
+		pending[url.OriginalURL] = url
+		result[i] = url
 	}
 
 	records := append([]fileRecord(nil), s.records...)
-	for i, url := range urls {
+	for _, url := range pending {
 		records = append(records, fileRecord{
-			UUID:        strconv.Itoa(s.nextUUID + i),
+			UUID:        strconv.Itoa(s.nextUUID + len(records) - len(s.records)),
 			ShortURL:    url.ID,
 			OriginalURL: url.OriginalURL,
 			UserID:      url.UserID,
 		})
 	}
 	if err := s.persist(records); err != nil {
-		return err
+		return nil, err
 	}
 
-	for _, url := range urls {
+	for _, url := range pending {
 		s.urls[url.ID] = url.OriginalURL
 		s.originalURLs[url.OriginalURL] = url.ID
 	}
 	s.records = records
-	s.nextUUID += len(urls)
-	return nil
+	s.nextUUID += len(pending)
+	return result, nil
 }
 
 func (s *File) Get(_ context.Context, id string) (string, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	for _, record := range s.records {
+		if record.ShortURL == id && record.Deleted {
+			return "", false, ErrURLDeleted
+		}
+	}
 	originalURL, ok := s.urls[id]
 	return originalURL, ok, nil
 }
@@ -138,11 +148,32 @@ func (s *File) GetByUser(_ context.Context, userID string) ([]URL, error) {
 
 	urls := make([]URL, 0)
 	for _, record := range s.records {
-		if record.UserID == userID {
+		if record.UserID == userID && !record.Deleted {
 			urls = append(urls, URL{ID: record.ShortURL, OriginalURL: record.OriginalURL, UserID: record.UserID})
 		}
 	}
 	return urls, nil
+}
+
+func (s *File) Delete(_ context.Context, ids []string, userID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	deleteIDs := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		deleteIDs[id] = struct{}{}
+	}
+	records := append([]fileRecord(nil), s.records...)
+	for i := range records {
+		if _, ok := deleteIDs[records[i].ShortURL]; ok && records[i].UserID == userID {
+			records[i].Deleted = true
+		}
+	}
+	if err := s.persist(records); err != nil {
+		return err
+	}
+	s.records = records
+	return nil
 }
 
 func (s *File) load() error {

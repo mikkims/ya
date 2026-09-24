@@ -12,20 +12,34 @@ import (
 type storageStub struct {
 	saveErrs      []error
 	saveBatchErrs []error
+	saveBatchURLs []storage.URL
 	savedBatches  [][]storage.URL
 	getURL        string
 	getOK         bool
 	getErr        error
 }
 
-func (s *storageStub) SaveBatch(_ context.Context, urls []storage.URL) error {
+func (s *storageStub) SaveBatch(_ context.Context, urls []storage.URL) ([]storage.URL, error) {
 	s.savedBatches = append(s.savedBatches, append([]storage.URL(nil), urls...))
 	if len(s.saveBatchErrs) == 0 {
-		return nil
+		if s.saveBatchURLs != nil {
+			return append([]storage.URL(nil), s.saveBatchURLs...), nil
+		}
+		return urls, nil
 	}
 	err := s.saveBatchErrs[0]
 	s.saveBatchErrs = s.saveBatchErrs[1:]
-	return err
+	return nil, err
+}
+
+func TestShortenerSaveBatchUsesStorageIDs(t *testing.T) {
+	store := &storageStub{saveBatchURLs: []storage.URL{{ID: "existing-id", OriginalURL: "https://example.com"}}}
+	shortener := NewShortener(store)
+
+	got, err := shortener.SaveBatch(context.Background(), []string{"https://example.com"})
+	if err != nil || !slices.Equal(got, []string{"existing-id"}) {
+		t.Fatalf("SaveBatch() = %v, %v; want existing-id", got, err)
+	}
 }
 
 func TestShortenerSaveBatch(t *testing.T) {

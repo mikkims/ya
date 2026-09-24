@@ -71,7 +71,7 @@ func TestFileSaveBatchPersistsOnceAndIsAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create storage: %v", err)
 	}
-	if err := store.SaveBatch(ctx, []URL{
+	if _, err := store.SaveBatch(ctx, []URL{
 		{ID: "first", OriginalURL: "https://first.example"},
 		{ID: "second", OriginalURL: "https://second.example"},
 	}); err != nil {
@@ -88,7 +88,7 @@ func TestFileSaveBatchPersistsOnceAndIsAtomic(t *testing.T) {
 		}
 	}
 
-	err = store.SaveBatch(ctx, []URL{
+	_, err = store.SaveBatch(ctx, []URL{
 		{ID: "third", OriginalURL: "https://third.example"},
 		{ID: "first", OriginalURL: "https://duplicate.example"},
 	})
