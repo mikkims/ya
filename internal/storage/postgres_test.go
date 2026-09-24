@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/jackc/pgerrcode"
 	"github.com/lib/pq"
+	"github.com/lib/pq/pqerror"
 )
 
 const (
@@ -52,7 +52,7 @@ func TestPostgreSQLSaveDuplicate(t *testing.T) {
 	store, mock := newPostgreSQLMock(t)
 	mock.ExpectExec(regexp.QuoteMeta(insertURLQuery)).
 		WithArgs("short-id", "https://example.com").
-		WillReturnError(&pq.Error{Code: pq.ErrorCode(pgerrcode.UniqueViolation), Constraint: shortURLPrimaryKeyConstraint})
+		WillReturnError(&pq.Error{Code: pqerror.UniqueViolation, Constraint: shortURLPrimaryKeyConstraint})
 
 	err := store.Save(context.Background(), "short-id", "https://example.com")
 	if !errors.Is(err, ErrIDExists) {
@@ -98,7 +98,7 @@ func TestPostgreSQLSaveBatchErrors(t *testing.T) {
 		dbErr   error
 		wantErr error
 	}{
-		{name: "duplicate", dbErr: &pq.Error{Code: pq.ErrorCode(pgerrcode.UniqueViolation), Constraint: shortURLPrimaryKeyConstraint}, wantErr: ErrIDExists},
+		{name: "duplicate", dbErr: &pq.Error{Code: pqerror.UniqueViolation, Constraint: shortURLPrimaryKeyConstraint}, wantErr: ErrIDExists},
 		{name: "database error", dbErr: errors.New("database unavailable"), wantErr: errors.New("database unavailable")},
 	}
 
@@ -143,7 +143,7 @@ func TestPostgreSQLSaveOriginalURLExists(t *testing.T) {
 	store, mock := newPostgreSQLMock(t)
 	mock.ExpectExec(regexp.QuoteMeta(insertURLQuery)).
 		WithArgs("new-id", "https://example.com").
-		WillReturnError(&pq.Error{Code: pq.ErrorCode(pgerrcode.UniqueViolation), Constraint: originalURLUniqueConstraint})
+		WillReturnError(&pq.Error{Code: pqerror.UniqueViolation, Constraint: originalURLUniqueConstraint})
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT short_url FROM urls WHERE original_url = $1")).
 		WithArgs("https://example.com").
 		WillReturnRows(sqlmock.NewRows([]string{"short_url"}).AddRow("existing-id"))
@@ -160,7 +160,7 @@ func TestPostgreSQLSaveOriginalURLLookupError(t *testing.T) {
 	wantErr := errors.New("lookup unavailable")
 	mock.ExpectExec(regexp.QuoteMeta(insertURLQuery)).
 		WithArgs("new-id", "https://example.com").
-		WillReturnError(&pq.Error{Code: pq.ErrorCode(pgerrcode.UniqueViolation), Constraint: originalURLUniqueConstraint})
+		WillReturnError(&pq.Error{Code: pqerror.UniqueViolation, Constraint: originalURLUniqueConstraint})
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT short_url FROM urls WHERE original_url = $1")).
 		WithArgs("https://example.com").
 		WillReturnError(wantErr)

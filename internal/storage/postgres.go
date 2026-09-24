@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jackc/pgerrcode"
 	"github.com/lib/pq"
+	"github.com/lib/pq/pqerror"
 	"github.com/mikkims/ya/internal/auth"
 )
 
@@ -47,7 +47,7 @@ func (s *PostgreSQL) Save(ctx context.Context, id, originalURL string) error {
 	}
 
 	var pqErr *pq.Error
-	if errors.As(err, &pqErr) && string(pqErr.Code) == pgerrcode.UniqueViolation {
+	if errors.As(err, &pqErr) && pqErr.Code == pqerror.UniqueViolation {
 		switch pqErr.Constraint {
 		case shortURLPrimaryKeyConstraint:
 			return ErrIDExists
@@ -91,13 +91,13 @@ func (s *PostgreSQL) SaveBatch(ctx context.Context, urls []URL) ([]URL, error) {
 	rows, err := s.db.QueryContext(ctx, query.String(), args...)
 	if err != nil {
 		var pqErr *pq.Error
-		if errors.As(err, &pqErr) && string(pqErr.Code) == pgerrcode.UniqueViolation &&
+		if errors.As(err, &pqErr) && pqErr.Code == pqerror.UniqueViolation &&
 			pqErr.Constraint == shortURLPrimaryKeyConstraint {
 			return nil, ErrIDExists
 		}
 		return nil, fmt.Errorf("save URL batch: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	idsByOriginalURL := make(map[string]string, len(unique))
 	for rows.Next() {
@@ -162,7 +162,7 @@ func (s *PostgreSQL) GetByUser(ctx context.Context, userID string) ([]URL, error
 	if err != nil {
 		return nil, fmt.Errorf("get user URLs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	urls := make([]URL, 0)
 	for rows.Next() {
