@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/mikkims/ya/internal/auth"
 	"github.com/rs/zerolog"
 )
 
@@ -17,15 +19,17 @@ type fileRecord struct {
 	UUID        string `json:"uuid"`
 	ShortURL    string `json:"short_url"`
 	OriginalURL string `json:"original_url"`
+	UserID      string `json:"user_id,omitempty"`
 }
 
 type File struct {
-	path     string
-	urls     map[string]string
-	records  []fileRecord
-	nextUUID int
-	mu       sync.RWMutex
-	logger   zerolog.Logger
+	path         string
+	urls         map[string]string
+	originalURLs map[string]string
+	records      []fileRecord
+	nextUUID     int
+	mu           sync.RWMutex
+	logger       zerolog.Logger
 }
 
 func NewFile(path string, logger zerolog.Logger) (*File, error) {
@@ -34,10 +38,11 @@ func NewFile(path string, logger zerolog.Logger) (*File, error) {
 	}
 
 	storage := &File{
-		path:     path,
-		urls:     make(map[string]string),
-		nextUUID: 1,
-		logger:   logger,
+		path:         path,
+		urls:         make(map[string]string),
+		originalURLs: make(map[string]string),
+		nextUUID:     1,
+		logger:       logger,
 	}
 	if err := storage.load(); err != nil {
 		return nil, err
@@ -45,10 +50,13 @@ func NewFile(path string, logger zerolog.Logger) (*File, error) {
 	return storage, nil
 }
 
-func (s *File) Save(id, originalURL string) error {
+func (s *File) Save(ctx context.Context, id, originalURL string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if existingID, exists := s.originalURLs[originalURL]; exists {
+		return &OriginalURLExistsError{ID: existingID}
+	}
 	if _, exists := s.urls[id]; exists {
 		return ErrIDExists
 	}
@@ -57,6 +65,7 @@ func (s *File) Save(id, originalURL string) error {
 		UUID:        strconv.Itoa(s.nextUUID),
 		ShortURL:    id,
 		OriginalURL: originalURL,
+		UserID:      auth.UserID(ctx),
 	}
 	records := append(append([]fileRecord(nil), s.records...), record)
 	if err := s.persist(records); err != nil {
@@ -65,16 +74,75 @@ func (s *File) Save(id, originalURL string) error {
 
 	s.records = records
 	s.urls[id] = originalURL
+	s.originalURLs[originalURL] = id
 	s.nextUUID++
 	return nil
 }
 
-func (s *File) Get(id string) (string, bool) {
+func (s *File) SaveBatch(_ context.Context, urls []URL) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ids := make(map[string]struct{}, len(urls))
+	originalURLs := make(map[string]string, len(urls))
+	for _, url := range urls {
+		if existingID, exists := s.originalURLs[url.OriginalURL]; exists {
+			return &OriginalURLExistsError{ID: existingID}
+		}
+		if existingID, exists := originalURLs[url.OriginalURL]; exists {
+			return &OriginalURLExistsError{ID: existingID}
+		}
+		if _, exists := s.urls[url.ID]; exists {
+			return ErrIDExists
+		}
+		if _, exists := ids[url.ID]; exists {
+			return ErrIDExists
+		}
+		ids[url.ID] = struct{}{}
+		originalURLs[url.OriginalURL] = url.ID
+	}
+
+	records := append([]fileRecord(nil), s.records...)
+	for i, url := range urls {
+		records = append(records, fileRecord{
+			UUID:        strconv.Itoa(s.nextUUID + i),
+			ShortURL:    url.ID,
+			OriginalURL: url.OriginalURL,
+			UserID:      url.UserID,
+		})
+	}
+	if err := s.persist(records); err != nil {
+		return err
+	}
+
+	for _, url := range urls {
+		s.urls[url.ID] = url.OriginalURL
+		s.originalURLs[url.OriginalURL] = url.ID
+	}
+	s.records = records
+	s.nextUUID += len(urls)
+	return nil
+}
+
+func (s *File) Get(_ context.Context, id string) (string, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	originalURL, ok := s.urls[id]
-	return originalURL, ok
+	return originalURL, ok, nil
+}
+
+func (s *File) GetByUser(_ context.Context, userID string) ([]URL, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	urls := make([]URL, 0)
+	for _, record := range s.records {
+		if record.UserID == userID {
+			urls = append(urls, URL{ID: record.ShortURL, OriginalURL: record.OriginalURL, UserID: record.UserID})
+		}
+	}
+	return urls, nil
 }
 
 func (s *File) load() error {
@@ -122,6 +190,10 @@ func (s *File) load() error {
 			return fmt.Errorf("storage file contains duplicate short URL %q", record.ShortURL)
 		}
 		s.urls[record.ShortURL] = record.OriginalURL
+		if existingID, exists := s.originalURLs[record.OriginalURL]; exists {
+			return fmt.Errorf("storage file contains duplicate original URL for IDs %q and %q", existingID, record.ShortURL)
+		}
+		s.originalURLs[record.OriginalURL] = record.ShortURL
 		uuid, err := strconv.Atoi(record.UUID)
 		if err != nil || uuid < 1 {
 			return fmt.Errorf("storage file contains invalid UUID %q", record.UUID)

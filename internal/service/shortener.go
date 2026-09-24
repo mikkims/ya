@@ -1,9 +1,11 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"math/rand"
 
+	"github.com/mikkims/ya/internal/auth"
 	"github.com/mikkims/ya/internal/storage"
 )
 
@@ -13,27 +15,71 @@ const (
 	maxSaveAttempts = 3
 )
 
-var ErrSaveAttemptsExceeded = errors.New("failed to save short URL after maximum attempts")
+var (
+	ErrSaveAttemptsExceeded = errors.New("failed to save short URL after maximum attempts")
+	ErrEmptyBatch           = errors.New("URL batch is empty")
+	ErrOriginalURLExists    = errors.New("original URL already exists")
+)
 
 type Shortener struct {
-	storage URLStorage
+	storage    URLStorage
+	generateID func() string
 }
 
 type URLStorage interface {
-	Save(id, originalURL string) error
-	Get(id string) (string, bool)
+	Save(ctx context.Context, id, originalURL string) error
+	SaveBatch(ctx context.Context, urls []storage.URL) error
+	Get(ctx context.Context, id string) (string, bool, error)
+}
+
+type userURLStorage interface {
+	GetByUser(ctx context.Context, userID string) ([]storage.URL, error)
+}
+
+func (s *Shortener) SaveBatch(ctx context.Context, originalURLs []string) ([]string, error) {
+	if len(originalURLs) == 0 {
+		return nil, ErrEmptyBatch
+	}
+
+	for range maxSaveAttempts {
+		urls := make([]storage.URL, len(originalURLs))
+		ids := make([]string, len(originalURLs))
+		usedIDs := make(map[string]struct{}, len(originalURLs))
+		for i, originalURL := range originalURLs {
+			id := s.generateUniqueID(usedIDs)
+			usedIDs[id] = struct{}{}
+			ids[i] = id
+			urls[i] = storage.URL{ID: id, OriginalURL: originalURL, UserID: auth.UserID(ctx)}
+		}
+
+		err := s.storage.SaveBatch(ctx, urls)
+		if errors.Is(err, storage.ErrIDExists) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		return ids, nil
+	}
+
+	return nil, ErrSaveAttemptsExceeded
 }
 
 func NewShortener(storage URLStorage) *Shortener {
 	return &Shortener{
-		storage: storage,
+		storage:    storage,
+		generateID: generateID,
 	}
 }
 
-func (s *Shortener) Save(originalURL string) (string, error) {
+func (s *Shortener) Save(ctx context.Context, originalURL string) (string, error) {
 	for range maxSaveAttempts {
-		id := generateID()
-		err := s.storage.Save(id, originalURL)
+		id := s.generateID()
+		err := s.storage.Save(ctx, id, originalURL)
+		var originalURLExists *storage.OriginalURLExistsError
+		if errors.As(err, &originalURLExists) {
+			return originalURLExists.ID, ErrOriginalURLExists
+		}
 		if errors.Is(err, storage.ErrIDExists) {
 			continue
 		}
@@ -47,8 +93,16 @@ func (s *Shortener) Save(originalURL string) (string, error) {
 	return "", ErrSaveAttemptsExceeded
 }
 
-func (s *Shortener) Get(id string) (string, bool) {
-	return s.storage.Get(id)
+func (s *Shortener) Get(ctx context.Context, id string) (string, bool, error) {
+	return s.storage.Get(ctx, id)
+}
+
+func (s *Shortener) GetByUser(ctx context.Context, userID string) ([]storage.URL, error) {
+	storage, ok := s.storage.(userURLStorage)
+	if !ok {
+		return nil, errors.New("storage does not support user URLs")
+	}
+	return storage.GetByUser(ctx, userID)
 }
 
 func generateID() string {
@@ -58,4 +112,13 @@ func generateID() string {
 	}
 
 	return string(id)
+}
+
+func (s *Shortener) generateUniqueID(used map[string]struct{}) string {
+	for {
+		id := s.generateID()
+		if _, exists := used[id]; !exists {
+			return id
+		}
+	}
 }
