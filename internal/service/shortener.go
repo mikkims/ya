@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math/rand"
 
+	"github.com/mikkims/ya/internal/auth"
 	"github.com/mikkims/ya/internal/storage"
 )
 
@@ -31,6 +32,10 @@ type URLStorage interface {
 	Get(ctx context.Context, id string) (string, bool, error)
 }
 
+type userURLStorage interface {
+	GetByUser(ctx context.Context, userID string) ([]storage.URL, error)
+}
+
 func (s *Shortener) SaveBatch(ctx context.Context, originalURLs []string) ([]string, error) {
 	if len(originalURLs) == 0 {
 		return nil, ErrEmptyBatch
@@ -44,7 +49,7 @@ func (s *Shortener) SaveBatch(ctx context.Context, originalURLs []string) ([]str
 			id := s.generateUniqueID(usedIDs)
 			usedIDs[id] = struct{}{}
 			ids[i] = id
-			urls[i] = storage.URL{ID: id, OriginalURL: originalURL}
+			urls[i] = storage.URL{ID: id, OriginalURL: originalURL, UserID: auth.UserID(ctx)}
 		}
 
 		err := s.storage.SaveBatch(ctx, urls)
@@ -90,6 +95,14 @@ func (s *Shortener) Save(ctx context.Context, originalURL string) (string, error
 
 func (s *Shortener) Get(ctx context.Context, id string) (string, bool, error) {
 	return s.storage.Get(ctx, id)
+}
+
+func (s *Shortener) GetByUser(ctx context.Context, userID string) ([]storage.URL, error) {
+	storage, ok := s.storage.(userURLStorage)
+	if !ok {
+		return nil, errors.New("storage does not support user URLs")
+	}
+	return storage.GetByUser(ctx, userID)
 }
 
 func generateID() string {

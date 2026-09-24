@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/mikkims/ya/internal/auth"
 	"github.com/rs/zerolog"
 )
 
@@ -18,6 +19,7 @@ type fileRecord struct {
 	UUID        string `json:"uuid"`
 	ShortURL    string `json:"short_url"`
 	OriginalURL string `json:"original_url"`
+	UserID      string `json:"user_id,omitempty"`
 }
 
 type File struct {
@@ -48,7 +50,7 @@ func NewFile(path string, logger zerolog.Logger) (*File, error) {
 	return storage, nil
 }
 
-func (s *File) Save(_ context.Context, id, originalURL string) error {
+func (s *File) Save(ctx context.Context, id, originalURL string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -63,6 +65,7 @@ func (s *File) Save(_ context.Context, id, originalURL string) error {
 		UUID:        strconv.Itoa(s.nextUUID),
 		ShortURL:    id,
 		OriginalURL: originalURL,
+		UserID:      auth.UserID(ctx),
 	}
 	records := append(append([]fileRecord(nil), s.records...), record)
 	if err := s.persist(records); err != nil {
@@ -105,6 +108,7 @@ func (s *File) SaveBatch(_ context.Context, urls []URL) error {
 			UUID:        strconv.Itoa(s.nextUUID + i),
 			ShortURL:    url.ID,
 			OriginalURL: url.OriginalURL,
+			UserID:      url.UserID,
 		})
 	}
 	if err := s.persist(records); err != nil {
@@ -126,6 +130,19 @@ func (s *File) Get(_ context.Context, id string) (string, bool, error) {
 
 	originalURL, ok := s.urls[id]
 	return originalURL, ok, nil
+}
+
+func (s *File) GetByUser(_ context.Context, userID string) ([]URL, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	urls := make([]URL, 0)
+	for _, record := range s.records {
+		if record.UserID == userID {
+			urls = append(urls, URL{ID: record.ShortURL, OriginalURL: record.OriginalURL, UserID: record.UserID})
+		}
+	}
+	return urls, nil
 }
 
 func (s *File) load() error {

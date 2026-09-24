@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/lib/pq"
+	"github.com/mikkims/ya/internal/auth"
 )
 
 const (
@@ -23,11 +24,22 @@ func NewPostgreSQL(db *sql.DB) *PostgreSQL {
 }
 
 func (s *PostgreSQL) Save(ctx context.Context, id, originalURL string) error {
-	_, err := s.db.ExecContext(ctx,
-		"INSERT INTO urls (short_url, original_url) VALUES ($1, $2)",
-		id,
-		originalURL,
-	)
+	userID := auth.UserID(ctx)
+	var err error
+	if userID == "" {
+		_, err = s.db.ExecContext(ctx,
+			"INSERT INTO urls (short_url, original_url) VALUES ($1, $2)",
+			id,
+			originalURL,
+		)
+	} else {
+		_, err = s.db.ExecContext(ctx,
+			"INSERT INTO urls (short_url, original_url, user_id) VALUES ($1, $2, $3)",
+			id,
+			originalURL,
+			userID,
+		)
+	}
 	if err == nil {
 		return nil
 	}
@@ -57,11 +69,21 @@ func (s *PostgreSQL) SaveBatch(ctx context.Context, urls []URL) (err error) {
 	}()
 
 	for _, url := range urls {
-		if _, err = tx.ExecContext(ctx,
-			"INSERT INTO urls (short_url, original_url) VALUES ($1, $2)",
-			url.ID,
-			url.OriginalURL,
-		); err != nil {
+		if url.UserID == "" {
+			_, err = tx.ExecContext(ctx,
+				"INSERT INTO urls (short_url, original_url) VALUES ($1, $2)",
+				url.ID,
+				url.OriginalURL,
+			)
+		} else {
+			_, err = tx.ExecContext(ctx,
+				"INSERT INTO urls (short_url, original_url, user_id) VALUES ($1, $2, $3)",
+				url.ID,
+				url.OriginalURL,
+				url.UserID,
+			)
+		}
+		if err != nil {
 			var pqErr *pq.Error
 			if errors.As(err, &pqErr) && pqErr.Code == "23505" {
 				switch pqErr.Constraint {
@@ -106,4 +128,29 @@ func (s *PostgreSQL) Get(ctx context.Context, id string) (string, bool, error) {
 	}
 
 	return originalURL, true, nil
+}
+
+func (s *PostgreSQL) GetByUser(ctx context.Context, userID string) ([]URL, error) {
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT short_url, original_url FROM urls WHERE user_id = $1 ORDER BY created_at",
+		userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get user URLs: %w", err)
+	}
+	defer rows.Close()
+
+	urls := make([]URL, 0)
+	for rows.Next() {
+		var url URL
+		if err := rows.Scan(&url.ID, &url.OriginalURL); err != nil {
+			return nil, fmt.Errorf("scan user URL: %w", err)
+		}
+		url.UserID = userID
+		urls = append(urls, url)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate user URLs: %w", err)
+	}
+	return urls, nil
 }

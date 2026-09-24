@@ -9,12 +9,17 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/mikkims/ya/internal/model/dto"
 	"github.com/mikkims/ya/internal/service"
+	"github.com/mikkims/ya/internal/storage"
 )
 
 type URLShortener interface {
 	Save(ctx context.Context, originalURL string) (string, error)
 	SaveBatch(ctx context.Context, originalURLs []string) ([]string, error)
 	Get(ctx context.Context, id string) (string, bool, error)
+}
+
+type userURLProvider interface {
+	GetByUser(ctx context.Context, userID string) ([]storage.URL, error)
 }
 
 type Pinger interface {
@@ -39,9 +44,11 @@ func NewRouterWithDatabase(baseURL string, service URLShortener, database Pinger
 	}
 
 	router := gin.New()
+	router.Use(h.authenticate)
 	router.POST("/", h.createShortURL)
 	router.POST("/api/shorten", h.createShortURLJSON)
 	router.POST("/api/shorten/batch", h.createShortURLBatch)
+	router.GET("/api/user/urls", h.getUserURLs)
 	router.GET("/ping", h.pingDatabase)
 	router.GET("/:id", h.getOriginalURL)
 	router.NoRoute(badRequest)
@@ -167,4 +174,38 @@ func (h *handler) getOriginalURL(c *gin.Context) {
 
 	c.Header("Location", originalURL)
 	c.Status(http.StatusTemporaryRedirect)
+}
+
+func (h *handler) getUserURLs(c *gin.Context) {
+	ownerID := userID(c)
+	if ownerID == "" {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+
+	provider, ok := h.service.(userURLProvider)
+	if !ok {
+		internalServerError(c)
+		return
+	}
+	urls, err := provider.GetByUser(c.Request.Context(), ownerID)
+	if err != nil {
+		internalServerError(c)
+		return
+	}
+	if len(urls) == 0 {
+		c.Status(http.StatusNoContent)
+		return
+	}
+
+	response := make([]dto.UserURL, len(urls))
+	for i, storedURL := range urls {
+		shortURL, err := url.JoinPath(h.baseURL, storedURL.ID)
+		if err != nil {
+			internalServerError(c)
+			return
+		}
+		response[i] = dto.UserURL{ShortURL: shortURL, OriginalURL: storedURL.OriginalURL}
+	}
+	c.JSON(http.StatusOK, response)
 }
