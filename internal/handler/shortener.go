@@ -7,6 +7,7 @@ import (
 	"net/url"
 
 	"github.com/gin-gonic/gin"
+	appauth "github.com/mikkims/ya/internal/auth"
 	"github.com/mikkims/ya/internal/model/dto"
 	"github.com/mikkims/ya/internal/service"
 	"github.com/mikkims/ya/internal/storage"
@@ -23,7 +24,7 @@ type userURLProvider interface {
 }
 
 type userURLDeleter interface {
-	Delete(ids []string, userID string)
+	Delete(ctx context.Context, ids []string, userID string) error
 }
 
 type Pinger interface {
@@ -110,7 +111,10 @@ func (h *handler) deleteUserURLs(c *gin.Context) {
 		internalServerError(c)
 		return
 	}
-	deleter.Delete(ids, userID(c))
+	if err := deleter.Delete(c.Request.Context(), ids, appauth.UserID(c.Request.Context())); err != nil {
+		internalServerError(c)
+		return
+	}
 	c.Status(http.StatusAccepted)
 }
 
@@ -201,7 +205,7 @@ func (h *handler) getOriginalURL(c *gin.Context) {
 }
 
 func (h *handler) getUserURLs(c *gin.Context) {
-	ownerID := userID(c)
+	ownerID := appauth.UserID(c.Request.Context())
 	if ownerID == "" {
 		c.Status(http.StatusUnauthorized)
 		return

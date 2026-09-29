@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	appauth "github.com/mikkims/ya/internal/auth"
 	"github.com/mikkims/ya/internal/model/dto"
 	"github.com/mikkims/ya/internal/service"
 	"github.com/mikkims/ya/internal/storage"
@@ -61,7 +63,11 @@ func TestUserURLsEmpty(t *testing.T) {
 func TestUserURLsRejectsCookieWithoutUserID(t *testing.T) {
 	router := NewRouter("http://localhost:8080", service.NewShortener(storage.NewMemory()))
 	request := httptest.NewRequest(http.MethodGet, "/api/user/urls", nil)
-	request.AddCookie(&http.Cookie{Name: userCookieName, Value: signUserID("")})
+	token, err := appauth.NewToken("")
+	if err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+	request.AddCookie(&http.Cookie{Name: userCookieName, Value: token})
 	response := httptest.NewRecorder()
 
 	router.ServeHTTP(response, request)
@@ -89,7 +95,17 @@ func TestInvalidCookieIsReplaced(t *testing.T) {
 }
 
 func TestDeleteUserURLs(t *testing.T) {
-	router := NewRouter("http://localhost:8080", service.NewShortener(storage.NewMemory()))
+	workerContext, stopWorker := context.WithCancel(context.Background())
+	shortener := service.NewShortener(storage.NewMemory(), service.DeleteOptions{BufferSize: 1, FlushInterval: time.Hour})
+	workerDone := make(chan error, 1)
+	go func() { workerDone <- shortener.RunDeleteWorker(workerContext) }()
+	t.Cleanup(func() {
+		stopWorker()
+		if err := <-workerDone; err != nil {
+			t.Errorf("delete worker: %v", err)
+		}
+	})
+	router := NewRouter("http://localhost:8080", shortener)
 	createRequest := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("https://example.com"))
 	createResponse := httptest.NewRecorder()
 	router.ServeHTTP(createResponse, createRequest)

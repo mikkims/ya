@@ -3,7 +3,10 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand"
+	"sync"
+	"time"
 
 	"github.com/mikkims/ya/internal/auth"
 	"github.com/mikkims/ya/internal/storage"
@@ -20,11 +23,27 @@ var (
 	ErrEmptyBatch           = errors.New("URL batch is empty")
 	ErrOriginalURLExists    = errors.New("original URL already exists")
 	ErrURLDeleted           = storage.ErrURLDeleted
+	ErrDeleteWorkerStopped  = errors.New("delete worker is stopped")
 )
 
+type DeleteOptions struct {
+	BufferSize    int
+	FlushInterval time.Duration
+}
+
+type deleteRequest struct {
+	ids    []string
+	userID string
+}
+
 type Shortener struct {
-	storage    URLStorage
-	generateID func() string
+	storage             URLStorage
+	generateID          func() string
+	deleteRequests      chan deleteRequest
+	deleteBufferSize    int
+	deleteFlushInterval time.Duration
+	deleteDone          chan struct{}
+	runOnce             sync.Once
 }
 
 type URLStorage interface {
@@ -73,10 +92,23 @@ func (s *Shortener) SaveBatch(ctx context.Context, originalURLs []string) ([]str
 	return nil, ErrSaveAttemptsExceeded
 }
 
-func NewShortener(storage URLStorage) *Shortener {
+func NewShortener(storage URLStorage, options ...DeleteOptions) *Shortener {
+	deleteOptions := DeleteOptions{BufferSize: 100, FlushInterval: time.Second}
+	if len(options) > 0 {
+		if options[0].BufferSize > 0 {
+			deleteOptions.BufferSize = options[0].BufferSize
+		}
+		if options[0].FlushInterval > 0 {
+			deleteOptions.FlushInterval = options[0].FlushInterval
+		}
+	}
 	return &Shortener{
-		storage:    storage,
-		generateID: generateID,
+		storage:             storage,
+		generateID:          generateID,
+		deleteRequests:      make(chan deleteRequest, deleteOptions.BufferSize),
+		deleteBufferSize:    deleteOptions.BufferSize,
+		deleteFlushInterval: deleteOptions.FlushInterval,
+		deleteDone:          make(chan struct{}),
 	}
 }
 
@@ -113,15 +145,92 @@ func (s *Shortener) GetByUser(ctx context.Context, userID string) ([]storage.URL
 	return storage.GetByUser(ctx, userID)
 }
 
-func (s *Shortener) Delete(ids []string, userID string) {
-	storage, ok := s.storage.(userURLDeleter)
-	if !ok {
-		return
+func (s *Shortener) Delete(ctx context.Context, ids []string, userID string) error {
+	if _, ok := s.storage.(userURLDeleter); !ok {
+		return errors.New("storage does not support URL deletion")
 	}
-	ids = append([]string(nil), ids...)
-	go func() {
-		_ = storage.Delete(context.Background(), ids, userID)
-	}()
+	request := deleteRequest{ids: append([]string(nil), ids...), userID: userID}
+	select {
+	case <-s.deleteDone:
+		return ErrDeleteWorkerStopped
+	default:
+	}
+	select {
+	case s.deleteRequests <- request:
+		return nil
+	case <-s.deleteDone:
+		return ErrDeleteWorkerStopped
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *Shortener) RunDeleteWorker(ctx context.Context) error {
+	var runErr error
+	s.runOnce.Do(func() {
+		runErr = s.runDeleteWorker(ctx)
+	})
+	return runErr
+}
+
+func (s *Shortener) runDeleteWorker(ctx context.Context) error {
+	deleter, ok := s.storage.(userURLDeleter)
+	if !ok {
+		close(s.deleteDone)
+		return nil
+	}
+
+	ticker := time.NewTicker(s.deleteFlushInterval)
+	defer ticker.Stop()
+	buffer := make(map[string][]string)
+	buffered := 0
+	flush := func(flushCtx context.Context) error {
+		for userID, ids := range buffer {
+			if err := deleter.Delete(flushCtx, ids, userID); err != nil {
+				return fmt.Errorf("flush URL deletions: %w", err)
+			}
+		}
+		clear(buffer)
+		buffered = 0
+		return nil
+	}
+
+	for {
+		select {
+		case request := <-s.deleteRequests:
+			buffer[request.userID] = append(buffer[request.userID], request.ids...)
+			buffered += len(request.ids)
+			if buffered >= s.deleteBufferSize {
+				if err := flush(ctx); err != nil {
+					close(s.deleteDone)
+					return err
+				}
+			}
+		case <-ticker.C:
+			if buffered > 0 {
+				if err := flush(ctx); err != nil {
+					close(s.deleteDone)
+					return err
+				}
+			}
+		case <-ctx.Done():
+			close(s.deleteDone)
+			for {
+				select {
+				case request := <-s.deleteRequests:
+					buffer[request.userID] = append(buffer[request.userID], request.ids...)
+					buffered += len(request.ids)
+				default:
+					shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+					defer cancel()
+					if buffered > 0 {
+						return flush(shutdownCtx)
+					}
+					return nil
+				}
+			}
+		}
+	}
 }
 
 func generateID() string {

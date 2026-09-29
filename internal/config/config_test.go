@@ -4,6 +4,7 @@ import (
 	"flag"
 	"os"
 	"testing"
+	"time"
 )
 
 func TestFileStoragePathPriority(t *testing.T) {
@@ -36,6 +37,28 @@ func TestFileStoragePathPriority(t *testing.T) {
 				t.Errorf("FileStoragePath = %q, want %q", cfg.FileStoragePath, tt.want)
 			}
 		})
+	}
+}
+
+func TestDeleteSettingsFromEnvironment(t *testing.T) {
+	originalCommandLine := flag.CommandLine
+	originalArgs := os.Args
+	defer func() {
+		flag.CommandLine = originalCommandLine
+		os.Args = originalArgs
+	}()
+
+	flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+	os.Args = []string{"shortener", "-delete-buffer-size", "10", "-delete-flush-interval", "2s"}
+	t.Setenv("DELETE_BUFFER_SIZE", "25")
+	t.Setenv("DELETE_FLUSH_INTERVAL", "750ms")
+
+	cfg := Load()
+	if cfg.DeleteBufferSize != 25 {
+		t.Fatalf("DeleteBufferSize = %d, want 25", cfg.DeleteBufferSize)
+	}
+	if cfg.DeleteFlushInterval != 750*time.Millisecond {
+		t.Fatalf("DeleteFlushInterval = %s, want 750ms", cfg.DeleteFlushInterval)
 	}
 }
 

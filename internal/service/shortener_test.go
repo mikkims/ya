@@ -4,10 +4,103 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/mikkims/ya/internal/storage"
 )
+
+type deleteStorageStub struct {
+	storageStub
+	mu      sync.Mutex
+	batches [][]string
+	flushed chan struct{}
+}
+
+func (s *deleteStorageStub) Delete(_ context.Context, ids []string, _ string) error {
+	s.mu.Lock()
+	s.batches = append(s.batches, append([]string(nil), ids...))
+	s.mu.Unlock()
+	select {
+	case s.flushed <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func TestDeleteWorkerFlushesFullBuffer(t *testing.T) {
+	store := &deleteStorageStub{flushed: make(chan struct{}, 1)}
+	shortener := NewShortener(store, DeleteOptions{BufferSize: 2, FlushInterval: time.Hour})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- shortener.RunDeleteWorker(ctx) }()
+
+	if err := shortener.Delete(ctx, []string{"one"}, "user"); err != nil {
+		t.Fatalf("enqueue first deletion: %v", err)
+	}
+	if err := shortener.Delete(ctx, []string{"two"}, "user"); err != nil {
+		t.Fatalf("enqueue second deletion: %v", err)
+	}
+	select {
+	case <-store.flushed:
+	case <-time.After(time.Second):
+		t.Fatal("delete buffer was not flushed")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("RunDeleteWorker() error = %v", err)
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.batches) != 1 || !slices.Equal(store.batches[0], []string{"one", "two"}) {
+		t.Fatalf("batches = %v, want [[one two]]", store.batches)
+	}
+}
+
+func TestDeleteWorkerFlushesOnShutdown(t *testing.T) {
+	store := &deleteStorageStub{flushed: make(chan struct{}, 1)}
+	shortener := NewShortener(store, DeleteOptions{BufferSize: 10, FlushInterval: time.Hour})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- shortener.RunDeleteWorker(ctx) }()
+
+	if err := shortener.Delete(ctx, []string{"one"}, "user"); err != nil {
+		t.Fatalf("enqueue deletion: %v", err)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("RunDeleteWorker() error = %v", err)
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.batches) != 1 || !slices.Equal(store.batches[0], []string{"one"}) {
+		t.Fatalf("batches = %v, want [[one]]", store.batches)
+	}
+}
+
+func TestDeleteWorkerFlushesOnInterval(t *testing.T) {
+	store := &deleteStorageStub{flushed: make(chan struct{}, 1)}
+	shortener := NewShortener(store, DeleteOptions{BufferSize: 10, FlushInterval: 10 * time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- shortener.RunDeleteWorker(ctx) }()
+
+	if err := shortener.Delete(ctx, []string{"one"}, "user"); err != nil {
+		t.Fatalf("enqueue deletion: %v", err)
+	}
+	select {
+	case <-store.flushed:
+	case <-time.After(time.Second):
+		t.Fatal("delete buffer was not flushed on interval")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("RunDeleteWorker() error = %v", err)
+	}
+}
 
 type storageStub struct {
 	saveErrs      []error
