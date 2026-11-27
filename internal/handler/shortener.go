@@ -5,8 +5,10 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/mikkims/ya/internal/audit"
 	appauth "github.com/mikkims/ya/internal/auth"
 	"github.com/mikkims/ya/internal/model/dto"
 	"github.com/mikkims/ya/internal/service"
@@ -32,6 +34,7 @@ type Pinger interface {
 }
 
 type handler struct {
+	audit    *audit.Publisher
 	baseURL  string
 	service  URLShortener
 	database Pinger
@@ -42,7 +45,12 @@ func NewRouter(baseURL string, service URLShortener) http.Handler {
 }
 
 func NewRouterWithDatabase(baseURL string, service URLShortener, database Pinger) http.Handler {
+	return NewRouterWithAudit(baseURL, service, database, nil)
+}
+
+func NewRouterWithAudit(baseURL string, service URLShortener, database Pinger, publisher *audit.Publisher) http.Handler {
 	h := &handler{
+		audit:    publisher,
 		baseURL:  baseURL,
 		service:  service,
 		database: database,
@@ -150,6 +158,9 @@ func (h *handler) createShortURLJSON(c *gin.Context) {
 	}
 
 	c.JSON(status, dto.ShortenResponse{Result: shortURL})
+	if status == http.StatusCreated {
+		h.publish(c, "shorten", request.URL)
+	}
 }
 
 func badRequest(c *gin.Context) {
@@ -182,6 +193,9 @@ func (h *handler) createShortURL(c *gin.Context) {
 		return
 	}
 	c.Data(status, "text/plain", []byte(shortURL))
+	if status == http.StatusCreated {
+		h.publish(c, "shorten", string(body))
+	}
 }
 
 func (h *handler) getOriginalURL(c *gin.Context) {
@@ -202,6 +216,11 @@ func (h *handler) getOriginalURL(c *gin.Context) {
 
 	c.Header("Location", originalURL)
 	c.Status(http.StatusTemporaryRedirect)
+	h.publish(c, "follow", originalURL)
+}
+
+func (h *handler) publish(c *gin.Context, action, originalURL string) {
+	h.audit.Publish(c.Request.Context(), audit.Event{Timestamp: time.Now().Unix(), Action: action, UserID: appauth.UserID(c.Request.Context()), URL: originalURL})
 }
 
 func (h *handler) getUserURLs(c *gin.Context) {

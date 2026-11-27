@@ -94,3 +94,26 @@ func TestDatabaseDSNPriority(t *testing.T) {
 		})
 	}
 }
+
+func TestAuditSettings(t *testing.T) {
+	oldFlags, oldArgs := flag.CommandLine, os.Args
+	defer func() { flag.CommandLine = oldFlags; os.Args = oldArgs }()
+	for _, tt := range []struct {
+		args                       []string
+		fileEnv, urlEnv, file, url string
+	}{
+		{file: "", url: ""},
+		{args: []string{"-audit-file", "flag-file", "-audit-url", "http://flag"}, file: "flag-file", url: "http://flag"},
+		{args: []string{"-audit-file", "flag-file", "-audit-url", "http://flag"}, fileEnv: "env-file", urlEnv: "http://env", file: "env-file", url: "http://env"},
+		{fileEnv: "env-file", file: "env-file"},
+	} {
+		flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+		os.Args = append([]string{"shortener"}, tt.args...)
+		t.Setenv("AUDIT_FILE", tt.fileEnv)
+		t.Setenv("AUDIT_URL", tt.urlEnv)
+		cfg := Load()
+		if cfg.AuditFile != tt.file || cfg.AuditURL != tt.url {
+			t.Fatalf("got %q %q", cfg.AuditFile, cfg.AuditURL)
+		}
+	}
+}

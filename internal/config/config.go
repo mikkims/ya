@@ -14,6 +14,8 @@ const (
 )
 
 type Config struct {
+	AuditFile           string
+	AuditURL            string
 	ServerAddress       string
 	BaseURL             string
 	FileStoragePath     string
@@ -24,6 +26,8 @@ type Config struct {
 
 func Load() *Config {
 	cfg := &Config{}
+	flag.StringVar(&cfg.AuditFile, "audit-file", "", "audit log file")
+	flag.StringVar(&cfg.AuditURL, "audit-url", "", "audit HTTP receiver")
 
 	flag.StringVar(&cfg.ServerAddress, "a", "localhost:8080", "address and port to run server")
 	flag.StringVar(&cfg.BaseURL, "b", "http://localhost:8080", "base address of the shortened URL")
@@ -32,6 +36,8 @@ func Load() *Config {
 	flag.IntVar(&cfg.DeleteBufferSize, "delete-buffer-size", DefaultDeleteBufferSize, "maximum number of URLs in a deletion batch")
 	flag.DurationVar(&cfg.DeleteFlushInterval, "delete-flush-interval", DefaultDeleteFlushInterval, "maximum delay before flushing URL deletions")
 	flag.Parse()
+	cfg.AuditFile = getEnv("AUDIT_FILE", cfg.AuditFile)
+	cfg.AuditURL = getEnv("AUDIT_URL", cfg.AuditURL)
 
 	cfg.ServerAddress = getEnv("SERVER_ADDRESS", cfg.ServerAddress)
 	cfg.BaseURL = getEnv("BASE_URL", cfg.BaseURL)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
+	"github.com/mikkims/ya/internal/audit"
 	"github.com/mikkims/ya/internal/config"
 	appdatabase "github.com/mikkims/ya/internal/database"
 	appgzip "github.com/mikkims/ya/internal/gzip"
@@ -27,6 +28,18 @@ import (
 func main() {
 	cfg := config.Load()
 	appLogger := zerolog.New(os.Stdout).With().Timestamp().Logger()
+	publisher, auditFile, err := buildAudit(cfg)
+	if err != nil {
+		appLogger.Error().Msg("failed to initialize audit")
+		return
+	}
+	if auditFile != nil {
+		defer func() {
+			if err := auditFile.Close(); err != nil {
+				appLogger.Error().Msg("failed to close audit file")
+			}
+		}()
+	}
 	appContext, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	startupContext, cancelStartup := context.WithTimeout(appContext, 10*time.Second)
@@ -48,10 +61,11 @@ func main() {
 		}()
 	}
 
-	router := handler.NewRouter(cfg.BaseURL, shortenerService)
+	var pinger handler.Pinger
 	if database != nil {
-		router = handler.NewRouterWithDatabase(cfg.BaseURL, shortenerService, database)
+		pinger = database
 	}
+	router := handler.NewRouterWithAudit(cfg.BaseURL, shortenerService, pinger, publisher)
 	compressedRouter := appgzip.MiddlewareGzip(appLogger)(router)
 
 	server := &http.Server{
@@ -78,6 +92,30 @@ func main() {
 	if err := group.Wait(); err != nil {
 		appLogger.Error().Err(err).Msg("server stopped with error")
 	}
+}
+
+func buildAudit(cfg *config.Config) (*audit.Publisher, *audit.File, error) {
+	var observers []audit.Observer
+	var file *audit.File
+	if cfg.AuditFile != "" {
+		var err error
+		file, err = audit.NewFile(cfg.AuditFile)
+		if err != nil {
+			return nil, nil, err
+		}
+		observers = append(observers, file)
+	}
+	if cfg.AuditURL != "" {
+		receiver, err := audit.NewHTTP(cfg.AuditURL)
+		if err != nil {
+			if file != nil {
+				_ = file.Close()
+			}
+			return nil, nil, err
+		}
+		observers = append(observers, receiver)
+	}
+	return audit.NewPublisher(observers...), file, nil
 }
 
 func buildStorage(ctx context.Context, cfg *config.Config, appLogger zerolog.Logger) (service.URLStorage, *sql.DB, error) {

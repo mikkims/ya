@@ -37,3 +37,33 @@ func TestBuildStorageFallback(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildAudit(t *testing.T) {
+	for _, tt := range []struct {
+		name, file, url   string
+		wantFile, wantErr bool
+	}{
+		{name: "disabled"},
+		{name: "file", file: "audit.log", wantFile: true},
+		{name: "http", url: "http://localhost:1234"},
+		{name: "both", file: "audit.log", url: "http://localhost:1234", wantFile: true},
+		{name: "invalid URL", file: "audit.log", url: "invalid", wantErr: true},
+		{name: "invalid file", file: "missing/audit.log", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := ""
+			if tt.file != "" {
+				path = filepath.Join(t.TempDir(), tt.file)
+			}
+			publisher, file, err := buildAudit(&config.Config{AuditFile: path, AuditURL: tt.url})
+			if (err != nil) != tt.wantErr || (file != nil) != tt.wantFile {
+				t.Fatalf("publisher=%v file=%v err=%v", publisher, file, err)
+			}
+			if file != nil {
+				if err := file.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
