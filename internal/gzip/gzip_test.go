@@ -148,3 +148,87 @@ func TestMiddlewareStreamsCompressedResponseBeforeHandlerReturns(t *testing.T) {
 	close(release)
 	<-done
 }
+
+type failingResponse struct{ header http.Header }
+
+func (w *failingResponse) Header() http.Header       { return w.header }
+func (w *failingResponse) WriteHeader(int)           {}
+func (w *failingResponse) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestCompressionReuseAndErrors(t *testing.T) {
+	h := MiddlewareGzip(zerolog.Nop())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", "999")
+		if r.URL.Path == "/panic" {
+			_, _ = w.Write([]byte("panic"))
+			panic("test")
+		}
+		_, _ = w.Write([]byte(r.URL.Path))
+	}))
+	request := func(path string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		r.Header.Set("Accept-Encoding", "gzip")
+		return r
+	}
+	h.ServeHTTP(&failingResponse{header: make(http.Header)}, request("/error"))
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("expected panic")
+			}
+		}()
+		h.ServeHTTP(httptest.NewRecorder(), request("/panic"))
+	}()
+	check := func(t *testing.T, path string) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, request(path))
+		if w.Code != http.StatusOK || w.Header().Get("Content-Encoding") != "gzip" || w.Header().Get("Content-Length") != "" {
+			t.Fatal("unexpected headers")
+		}
+		r, err := compressgzip.NewReader(w.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if string(body) != path {
+			t.Fatalf("got %q, want %q", body, path)
+		}
+	}
+	for _, path := range []string{"/one", "/two", "/"} {
+		check(t, path)
+	}
+	for _, path := range []string{"/a", "/b", "/c", "/d"} {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+			for range 20 {
+				check(t, path)
+			}
+		})
+	}
+}
+
+func TestCompressionEmptyResponse(t *testing.T) {
+	h := MiddlewareGzip(zerolog.Nop())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.Header().Set("Content-Type", "application/json") }))
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	r, err := compressgzip.NewReader(w.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(r)
+	if err != nil || len(body) != 0 {
+		t.Fatalf("body %q: %v", body, err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
