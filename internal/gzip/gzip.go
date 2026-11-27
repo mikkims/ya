@@ -2,13 +2,17 @@ package gzip
 
 import (
 	compressgzip "compress/gzip"
+	"io"
 	"mime"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/rs/zerolog"
 )
+
+var writerPool = sync.Pool{New: func() any { return compressgzip.NewWriter(io.Discard) }}
 
 type responseWriter struct {
 	http.ResponseWriter
@@ -35,6 +39,8 @@ func (w *responseWriter) Write(data []byte) (int, error) {
 	return w.ResponseWriter.Write(data)
 }
 
+// MiddlewareGzip распаковывает запросы с Content-Encoding: gzip.
+// Ответы application/json и text/html сжимаются, если клиент принимает gzip.
 func MiddlewareGzip(logger zerolog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -60,6 +66,7 @@ func MiddlewareGzip(logger zerolog.Logger) func(http.Handler) http.Handler {
 				acceptsCompression: acceptsGzip(r.Header.Get("Accept-Encoding")),
 				logger:             logger,
 			}
+			defer writer.release()
 			next.ServeHTTP(writer, r)
 			if err := writer.finish(); err != nil {
 				logger.Error().Err(err).Msg("failed to finish gzip response")
@@ -84,7 +91,8 @@ func (w *responseWriter) commitHeader(firstChunk []byte) {
 		w.Header().Set("Content-Encoding", "gzip")
 		w.Header().Add("Vary", "Accept-Encoding")
 		w.Header().Del("Content-Length")
-		w.gzipWriter = compressgzip.NewWriter(w.ResponseWriter)
+		w.gzipWriter = writerPool.Get().(*compressgzip.Writer)
+		w.gzipWriter.Reset(w.ResponseWriter)
 	}
 	w.ResponseWriter.WriteHeader(w.status)
 	w.wroteHeader = true
@@ -95,9 +103,22 @@ func (w *responseWriter) finish() error {
 		w.commitHeader(nil)
 	}
 	if w.gzipWriter != nil {
-		return w.gzipWriter.Close()
+		err := w.gzipWriter.Close()
+		if err == nil {
+			w.gzipWriter.Reset(io.Discard)
+			writerPool.Put(w.gzipWriter)
+			w.gzipWriter = nil
+		}
+		return err
 	}
 	return nil
+}
+
+func (w *responseWriter) release() {
+	if w.gzipWriter != nil {
+		w.gzipWriter.Reset(io.Discard)
+		w.gzipWriter = nil
+	}
 }
 
 func (w *responseWriter) Flush() {
