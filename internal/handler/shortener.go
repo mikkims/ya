@@ -15,9 +15,13 @@ import (
 	"github.com/mikkims/ya/internal/storage"
 )
 
+// URLShortener определяет операции сокращения URL для обработчиков.
 type URLShortener interface {
+	// Save сохраняет исходный URL и возвращает короткий идентификатор или ошибку.
 	Save(ctx context.Context, originalURL string) (string, error)
+	// SaveBatch возвращает короткие идентификаторы в порядке исходных URL или ошибку.
 	SaveBatch(ctx context.Context, originalURLs []string) ([]string, error)
+	// Get ищет URL по идентификатору и возвращает результат, признак наличия и ошибку.
 	Get(ctx context.Context, id string) (string, bool, error)
 }
 
@@ -29,7 +33,9 @@ type userURLDeleter interface {
 	Delete(ctx context.Context, ids []string, userID string) error
 }
 
+// Pinger проверяет доступность базы с контекстом.
 type Pinger interface {
+	// PingContext проверяет доступность с указанным контекстом.
 	PingContext(ctx context.Context) error
 }
 
@@ -40,14 +46,32 @@ type handler struct {
 	database Pinger
 }
 
+// NewRouter создаёт маршрутизатор сокращения URL без проверки подключения к БД и аудита.
+// Переданный service может использовать любое хранилище.
+//
+// Маршруты:
+//   - POST / принимает исходный URL текстом и возвращает короткий URL (201 или 409).
+//   - POST /api/shorten принимает JSON с полем url и возвращает result (201 или 409).
+//   - POST /api/shorten/batch сохраняет пакет с correlation_id и original_url (201).
+//   - GET /{id} возвращает 307 и Location; неизвестный ID даёт 400, удалённый — 410.
+//   - GET /api/user/urls возвращает ссылки пользователя из cookie user_id (200 или 204).
+//   - DELETE /api/user/urls ставит массив ID в очередь удаления (202).
+//   - GET /ping проверяет Pinger; без переданного Pinger возвращает 500.
+//
+// Для проверки БД и аудита используются NewRouterWithDatabase и NewRouterWithAudit.
 func NewRouter(baseURL string, service URLShortener) http.Handler {
 	return NewRouterWithDatabase(baseURL, service, nil)
 }
 
+// NewRouterWithDatabase создаёт маршрутизатор с Pinger для GET /ping без аудита.
+// При nil Pinger или ошибке проверки GET /ping возвращает 500, иначе — 200.
 func NewRouterWithDatabase(baseURL string, service URLShortener, database Pinger) http.Handler {
 	return NewRouterWithAudit(baseURL, service, database, nil)
 }
 
+// NewRouterWithAudit создаёт маршрутизатор с необязательными Pinger и издателем аудита.
+// nil publisher отключает аудит; nil database приводит к ответу 500 на GET /ping.
+// События аудита публикуются после создания URL с кодом 201 и перехода с кодом 307.
 func NewRouterWithAudit(baseURL string, service URLShortener, database Pinger, publisher *audit.Publisher) http.Handler {
 	h := &handler{
 		audit:    publisher,

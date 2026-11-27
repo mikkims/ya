@@ -17,14 +17,17 @@ const (
 	originalURLUniqueConstraint  = "idx_urls_original_url_unique"
 )
 
+// PostgreSQL хранит URL в PostgreSQL.
 type PostgreSQL struct {
 	db *sql.DB
 }
 
+// NewPostgreSQL создаёт хранилище с переданным пулом; вызывающий код владеет пулом.
 func NewPostgreSQL(db *sql.DB) *PostgreSQL {
 	return &PostgreSQL{db: db}
 }
 
+// Save сохраняет идентификатор и исходный URL с контекстом или возвращает ошибку.
 func (s *PostgreSQL) Save(ctx context.Context, id, originalURL string) error {
 	userID := auth.UserID(ctx)
 	var err error
@@ -59,6 +62,7 @@ func (s *PostgreSQL) Save(ctx context.Context, id, originalURL string) error {
 	return fmt.Errorf("save URL: %w", err)
 }
 
+// SaveBatch сохраняет пакет записей и возвращает соответствующие записи или ошибку.
 func (s *PostgreSQL) SaveBatch(ctx context.Context, urls []URL) ([]URL, error) {
 	if len(urls) == 0 {
 		return []URL{}, nil
@@ -134,6 +138,7 @@ func (s *PostgreSQL) originalURLExistsError(ctx context.Context, originalURL str
 	return &OriginalURLExistsError{ID: id}
 }
 
+// Get ищет URL по идентификатору и возвращает результат, признак наличия и ошибку.
 func (s *PostgreSQL) Get(ctx context.Context, id string) (string, bool, error) {
 	var originalURL string
 	var deleted bool
@@ -154,6 +159,7 @@ func (s *PostgreSQL) Get(ctx context.Context, id string) (string, bool, error) {
 	return originalURL, true, nil
 }
 
+// GetByUser возвращает неудалённые URL пользователя или ошибку.
 func (s *PostgreSQL) GetByUser(ctx context.Context, userID string) ([]URL, error) {
 	rows, err := s.db.QueryContext(ctx,
 		"SELECT short_url, original_url FROM urls WHERE user_id = $1 AND NOT is_deleted ORDER BY created_at",
@@ -179,6 +185,7 @@ func (s *PostgreSQL) GetByUser(ctx context.Context, userID string) ([]URL, error
 	return urls, nil
 }
 
+// Delete помечает URL указанного пользователя удалёнными.
 func (s *PostgreSQL) Delete(ctx context.Context, ids []string, userID string) error {
 	_, err := s.db.ExecContext(ctx,
 		"UPDATE urls SET is_deleted = TRUE WHERE user_id = $1 AND short_url = ANY($2)",

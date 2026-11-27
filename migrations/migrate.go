@@ -14,6 +14,7 @@ import (
 //go:embed *.sql
 var files embed.FS
 
+// Up применяет встроенные миграции к базе и возвращает ошибку при неудаче.
 func Up(db *sql.DB) error {
 	source, err := iofs.New(files, ".")
 	if err != nil {

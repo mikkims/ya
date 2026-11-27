@@ -39,6 +39,8 @@ func (w *responseWriter) Write(data []byte) (int, error) {
 	return w.ResponseWriter.Write(data)
 }
 
+// MiddlewareGzip распаковывает запросы с Content-Encoding: gzip.
+// Ответы application/json и text/html сжимаются, если клиент принимает gzip.
 func MiddlewareGzip(logger zerolog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

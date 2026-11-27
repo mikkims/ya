@@ -8,22 +8,37 @@ import (
 )
 
 const (
-	DefaultFileStoragePath     = ""
-	DefaultDeleteBufferSize    = 100
+	// DefaultFileStoragePath путь к файлу хранилища по умолчанию.
+	DefaultFileStoragePath = ""
+	// DefaultDeleteBufferSize задаёт порог числа URL для сброса удалений по умолчанию.
+	DefaultDeleteBufferSize = 100
+	// DefaultDeleteFlushInterval интервал сброса удалений по умолчанию.
 	DefaultDeleteFlushInterval = time.Second
 )
 
+// Config содержит параметры приложения.
 type Config struct {
-	AuditFile           string
-	AuditURL            string
-	ServerAddress       string
-	BaseURL             string
-	FileStoragePath     string
-	DatabaseDSN         string
-	DeleteBufferSize    int
+	// AuditFile путь к файлу аудита.
+	AuditFile string
+	// AuditURL адрес HTTP-получателя аудита.
+	AuditURL string
+	// ServerAddress адрес HTTP-сервера.
+	ServerAddress string
+	// BaseURL базовый адрес коротких URL.
+	BaseURL string
+	// FileStoragePath путь к файлу хранилища.
+	FileStoragePath string
+	// DatabaseDSN строка подключения к базе данных.
+	DatabaseDSN string
+	// DeleteBufferSize задаёт порог числа URL для сброса накопленных удалений.
+	DeleteBufferSize int
+	// DeleteFlushInterval интервал сброса очереди удаления.
 	DeleteFlushInterval time.Duration
 }
 
+// Load разбирает флаги и применяет значения окружения с приоритетом над флагами.
+// Пустые значения окружения и некорректные или неположительные числовые параметры
+// не заменяют значения флагов. Функция использует глобальный набор flag.CommandLine.
 func Load() *Config {
 	cfg := &Config{}
 	flag.StringVar(&cfg.AuditFile, "audit-file", "", "audit log file")

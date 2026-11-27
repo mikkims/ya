@@ -11,6 +11,7 @@ const tokenTTL = 24 * time.Hour
 
 var tokenKey = []byte("shortener-cookie-signing-key")
 
+// NewToken создаёт подписанный токен пользователя со сроком действия 24 часа.
 func NewToken(userID string) (string, error) {
 	now := time.Now()
 	claims := jwt.RegisteredClaims{
@@ -21,6 +22,7 @@ func NewToken(userID string) (string, error) {
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(tokenKey)
 }
 
+// UserIDFromToken проверяет токен и возвращает идентификатор и признак успешной проверки.
 func UserIDFromToken(value string) (string, bool) {
 	claims := new(jwt.RegisteredClaims)
 	token, err := jwt.ParseWithClaims(value, claims, func(token *jwt.Token) (any, error) {

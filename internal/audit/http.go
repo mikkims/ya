@@ -11,11 +11,14 @@ import (
 	"time"
 )
 
+// HTTP отправляет события аудита по HTTP.
 type HTTP struct {
 	url    string
 	client *http.Client
 }
 
+// NewHTTP создаёт получателя для абсолютного HTTP или HTTPS URL либо возвращает ошибку.
+// Запросы имеют тайм-аут три секунды и не следуют перенаправлениям.
 func NewHTTP(address string) (*HTTP, error) {
 	u, err := url.Parse(address)
 	if err != nil || u == nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -23,7 +26,11 @@ func NewHTTP(address string) (*HTTP, error) {
 	}
 	return &HTTP{url: address, client: &http.Client{Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
+
+// Name возвращает имя получателя.
 func (*HTTP) Name() string { return "http" }
+
+// Observe отправляет событие методом POST с указанным контекстом и возвращает ошибку при ответе вне 2xx.
 func (h *HTTP) Observe(ctx context.Context, event Event) (result error) {
 	data, err := json.Marshal(event)
 	if err != nil {

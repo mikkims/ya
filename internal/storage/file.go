@@ -23,6 +23,7 @@ type fileRecord struct {
 	Deleted     bool   `json:"is_deleted,omitempty"`
 }
 
+// File представляет файловое хранилище.
 type File struct {
 	path         string
 	urls         map[string]string
@@ -33,6 +34,7 @@ type File struct {
 	logger       zerolog.Logger
 }
 
+// NewFile создаёт файловое хранилище и загружает существующие записи.
 func NewFile(path string, logger zerolog.Logger) (*File, error) {
 	if path == "" {
 		return nil, errors.New("storage file path is empty")
@@ -51,6 +53,7 @@ func NewFile(path string, logger zerolog.Logger) (*File, error) {
 	return storage, nil
 }
 
+// Save сохраняет идентификатор и исходный URL с контекстом или возвращает ошибку.
 func (s *File) Save(ctx context.Context, id, originalURL string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -80,6 +83,7 @@ func (s *File) Save(ctx context.Context, id, originalURL string) error {
 	return nil
 }
 
+// SaveBatch сохраняет пакет записей и возвращает соответствующие записи или ошибку.
 func (s *File) SaveBatch(_ context.Context, urls []URL) ([]URL, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -129,6 +133,7 @@ func (s *File) SaveBatch(_ context.Context, urls []URL) ([]URL, error) {
 	return result, nil
 }
 
+// Get ищет URL по идентификатору и возвращает результат, признак наличия и ошибку.
 func (s *File) Get(_ context.Context, id string) (string, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -142,6 +147,7 @@ func (s *File) Get(_ context.Context, id string) (string, bool, error) {
 	return originalURL, ok, nil
 }
 
+// GetByUser возвращает неудалённые URL пользователя или ошибку.
 func (s *File) GetByUser(_ context.Context, userID string) ([]URL, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -155,6 +161,7 @@ func (s *File) GetByUser(_ context.Context, userID string) ([]URL, error) {
 	return urls, nil
 }
 
+// Delete помечает URL указанного пользователя удалёнными.
 func (s *File) Delete(_ context.Context, ids []string, userID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

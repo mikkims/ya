@@ -19,15 +19,23 @@ const (
 )
 
 var (
+	// ErrSaveAttemptsExceeded означает исчерпание попыток сохранить URL.
 	ErrSaveAttemptsExceeded = errors.New("failed to save short URL after maximum attempts")
-	ErrEmptyBatch           = errors.New("URL batch is empty")
-	ErrOriginalURLExists    = errors.New("original URL already exists")
-	ErrURLDeleted           = storage.ErrURLDeleted
-	ErrDeleteWorkerStopped  = errors.New("delete worker is stopped")
+	// ErrEmptyBatch означает пустой пакет URL.
+	ErrEmptyBatch = errors.New("URL batch is empty")
+	// ErrOriginalURLExists означает, что исходный URL уже сохранён.
+	ErrOriginalURLExists = errors.New("original URL already exists")
+	// ErrURLDeleted означает, что URL помечен удалённым.
+	ErrURLDeleted = storage.ErrURLDeleted
+	// ErrDeleteWorkerStopped означает остановку обработчика удаления.
+	ErrDeleteWorkerStopped = errors.New("delete worker is stopped")
 )
 
+// DeleteOptions задаёт параметры пакетного удаления.
 type DeleteOptions struct {
-	BufferSize    int
+	// BufferSize порог числа URL для сброса пакета.
+	BufferSize int
+	// FlushInterval интервал сброса непустого пакета.
 	FlushInterval time.Duration
 }
 
@@ -36,6 +44,7 @@ type deleteRequest struct {
 	userID string
 }
 
+// Shortener сокращает URL и ставит удаления в очередь.
 type Shortener struct {
 	storage             URLStorage
 	generateID          func() string
@@ -46,9 +55,13 @@ type Shortener struct {
 	runOnce             sync.Once
 }
 
+// URLStorage определяет операции хранения для сокращения URL.
 type URLStorage interface {
+	// Save сохраняет идентификатор и исходный URL с контекстом или возвращает ошибку.
 	Save(ctx context.Context, id, originalURL string) error
+	// SaveBatch сохраняет пакет записей и возвращает соответствующие записи или ошибку.
 	SaveBatch(ctx context.Context, urls []storage.URL) ([]storage.URL, error)
+	// Get ищет URL по идентификатору и возвращает результат, признак наличия и ошибку.
 	Get(ctx context.Context, id string) (string, bool, error)
 }
 
@@ -60,6 +73,8 @@ type userURLDeleter interface {
 	Delete(ctx context.Context, ids []string, userID string) error
 }
 
+// SaveBatch возвращает идентификаторы в порядке входного списка исходных URL.
+// Пустой список приводит к ErrEmptyBatch; существующие URL используют сохранённые ID.
 func (s *Shortener) SaveBatch(ctx context.Context, originalURLs []string) ([]string, error) {
 	if len(originalURLs) == 0 {
 		return nil, ErrEmptyBatch
@@ -92,6 +107,7 @@ func (s *Shortener) SaveBatch(ctx context.Context, originalURLs []string) ([]str
 	return nil, ErrSaveAttemptsExceeded
 }
 
+// NewShortener создаёт сервис с хранилищем и необязательными параметрами удаления.
 func NewShortener(storage URLStorage, options ...DeleteOptions) *Shortener {
 	deleteOptions := DeleteOptions{BufferSize: 100, FlushInterval: time.Second}
 	if len(options) > 0 {
@@ -112,6 +128,8 @@ func NewShortener(storage URLStorage, options ...DeleteOptions) *Shortener {
 	}
 }
 
+// Save возвращает идентификатор сохранённого исходного URL.
+// Для уже существующего URL возвращаются его идентификатор и ErrOriginalURLExists.
 func (s *Shortener) Save(ctx context.Context, originalURL string) (string, error) {
 	for range maxSaveAttempts {
 		id := s.generateID()
@@ -133,10 +151,12 @@ func (s *Shortener) Save(ctx context.Context, originalURL string) (string, error
 	return "", ErrSaveAttemptsExceeded
 }
 
+// Get ищет URL по идентификатору и возвращает результат, признак наличия и ошибку.
 func (s *Shortener) Get(ctx context.Context, id string) (string, bool, error) {
 	return s.storage.Get(ctx, id)
 }
 
+// GetByUser возвращает неудалённые URL пользователя или ошибку.
 func (s *Shortener) GetByUser(ctx context.Context, userID string) ([]storage.URL, error) {
 	storage, ok := s.storage.(userURLStorage)
 	if !ok {
@@ -145,6 +165,8 @@ func (s *Shortener) GetByUser(ctx context.Context, userID string) ([]storage.URL
 	return storage.GetByUser(ctx, userID)
 }
 
+// Delete ставит запрос удаления URL пользователя в очередь или возвращает ошибку.
+// Успешный возврат означает постановку в очередь; удаление выполняет RunDeleteWorker.
 func (s *Shortener) Delete(ctx context.Context, ids []string, userID string) error {
 	if _, ok := s.storage.(userURLDeleter); !ok {
 		return errors.New("storage does not support URL deletion")
@@ -165,6 +187,9 @@ func (s *Shortener) Delete(ctx context.Context, ids []string, userID string) err
 	}
 }
 
+// RunDeleteWorker синхронно обрабатывает очередь до отмены контекста или ошибки сброса.
+// Его следует запускать в отдельной goroutine. При отмене контекста остаток очереди
+// сбрасывается; повторный вызов не запускает обработку заново.
 func (s *Shortener) RunDeleteWorker(ctx context.Context) error {
 	var runErr error
 	s.runOnce.Do(func() {

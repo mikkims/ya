@@ -6,6 +6,7 @@ import (
 	"fmt"
 )
 
+// Open открывает и проверяет соединение с базой; вызывающий код закрывает возвращённый пул.
 func Open(ctx context.Context, driver, dsn string) (*sql.DB, error) {
 	db, err := sql.Open(driver, dsn)
 	if err != nil {

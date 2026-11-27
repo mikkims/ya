@@ -9,36 +9,50 @@ import (
 )
 
 var (
-	ErrIDExists          = errors.New("short URL ID already exists")
+	// ErrIDExists означает занятый идентификатор короткого URL.
+	ErrIDExists = errors.New("short URL ID already exists")
+	// ErrOriginalURLExists означает, что исходный URL уже сохранён.
 	ErrOriginalURLExists = errors.New("original URL already exists")
-	ErrURLDeleted        = errors.New("URL is deleted")
+	// ErrURLDeleted означает, что URL помечен удалённым.
+	ErrURLDeleted = errors.New("URL is deleted")
 )
 
+// OriginalURLExistsError содержит идентификатор уже сохранённого исходного URL.
 type OriginalURLExistsError struct {
+	// ID идентификатор короткого URL.
 	ID string
 }
 
+// Error возвращает описание ошибки существующего URL.
 func (e *OriginalURLExistsError) Error() string {
 	return ErrOriginalURLExists.Error()
 }
 
+// Unwrap возвращает ErrOriginalURLExists.
 func (e *OriginalURLExistsError) Unwrap() error {
 	return ErrOriginalURLExists
 }
 
+// URL описывает сохранённую запись URL.
 type URL struct {
-	ID          string
+	// ID идентификатор короткого URL.
+	ID string
+	// OriginalURL исходный URL.
 	OriginalURL string
-	UserID      string
-	Deleted     bool
+	// UserID идентификатор пользователя.
+	UserID string
+	// Deleted признак удаления.
+	Deleted bool
 }
 
+// Memory хранит URL в памяти процесса.
 type Memory struct {
 	urls         map[string]URL
 	originalURLs map[string]string
 	mu           sync.Mutex
 }
 
+// NewMemory создаёт пустое хранилище в памяти.
 func NewMemory() *Memory {
 	return &Memory{
 		urls:         make(map[string]URL),
@@ -46,6 +60,7 @@ func NewMemory() *Memory {
 	}
 }
 
+// Save сохраняет идентификатор и исходный URL с контекстом или возвращает ошибку.
 func (s *Memory) Save(ctx context.Context, id, originalURL string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -62,6 +77,7 @@ func (s *Memory) Save(ctx context.Context, id, originalURL string) error {
 	return nil
 }
 
+// SaveBatch сохраняет пакет записей и возвращает соответствующие записи или ошибку.
 func (s *Memory) SaveBatch(_ context.Context, urls []URL) ([]URL, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -96,6 +112,7 @@ func (s *Memory) SaveBatch(_ context.Context, urls []URL) ([]URL, error) {
 	return result, nil
 }
 
+// Get ищет URL по идентификатору и возвращает результат, признак наличия и ошибку.
 func (s *Memory) Get(_ context.Context, id string) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -107,6 +124,7 @@ func (s *Memory) Get(_ context.Context, id string) (string, bool, error) {
 	return storedURL.OriginalURL, ok, nil
 }
 
+// GetByUser возвращает неудалённые URL пользователя или ошибку.
 func (s *Memory) GetByUser(_ context.Context, userID string) ([]URL, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -120,6 +138,7 @@ func (s *Memory) GetByUser(_ context.Context, userID string) ([]URL, error) {
 	return urls, nil
 }
 
+// Delete помечает URL указанного пользователя удалёнными.
 func (s *Memory) Delete(_ context.Context, ids []string, userID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
